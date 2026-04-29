@@ -322,11 +322,13 @@ function renderMemories() {
     <div class="memory-item" data-memory-id="${entry.id}">
       <div class="memory-meta">
         <span class="token">${escapeHtml(entry.kind)}</span>
+        <span class="token">${escapeHtml(entry.namespace || 'household.general')}</span>
         <span>${escapeHtml(entry.scope)}</span>
         <span>${escapeHtml(entry.sensitivity)}</span>
         <span>recalls ${escapeHtml(entry.recall_count)}</span>
         <span>${escapeHtml(formatTime(entry.accessed_ms))}</span>
       </div>
+      ${entry.canonical_note ? `<div class="small">Durable note: ${escapeHtml(entry.canonical_note)}</div>` : ''}
       <textarea class="memory-content" id="memory-content-${entry.id}"></textarea>
       <div class="memory-actions">
         <button class="btn" type="button" onclick="saveMemory(${entry.id})">Save</button>

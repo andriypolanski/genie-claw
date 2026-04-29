@@ -45,6 +45,7 @@ pub struct MemoryHealth {
     pub fts_rows: usize,
     pub fts_consistent: bool,
     pub canonical_root_exists: bool,
+    pub canonical_namespace_files: usize,
     pub canonical_daily_files: usize,
     pub canonical_event_logs: usize,
     pub person_rows: usize,
@@ -84,6 +85,8 @@ pub struct ManagedMemoryEntry {
     pub scope: String,
     pub sensitivity: String,
     pub spoken_policy: String,
+    pub namespace: String,
+    pub canonical_note: Option<String>,
     pub display_order: i64,
 }
 
@@ -490,10 +493,29 @@ impl Memory {
              LIMIT ?1",
         )?;
 
-        let entries = stmt
+        let mut entries = stmt
             .query_map([limit.max(1)], read_managed_entry)?
             .filter_map(|row| row.ok())
-            .collect();
+            .collect::<Vec<_>>();
+
+        for entry in &mut entries {
+            entry.namespace = canonical_namespace(
+                &entry.kind,
+                policy::MemoryPolicyMetadata {
+                    scope: policy::MemoryScope::from_storage(&entry.scope),
+                    sensitivity: policy::MemorySensitivity::from_storage(&entry.sensitivity),
+                    spoken_policy: policy::SpokenMemoryPolicy::from_storage(&entry.spoken_policy),
+                },
+            );
+            entry.canonical_note = if entry.promoted {
+                Some(format!(
+                    "memory/{}",
+                    canonical_namespace_note_relative(&entry.namespace)
+                ))
+            } else {
+                None
+            };
+        }
 
         Ok(entries)
     }
@@ -812,6 +834,8 @@ impl Memory {
             |row| row.get(0),
         )?;
         let canonical_root_exists = self.canonical_dir.join("MEMORY.md").exists();
+        let canonical_namespace_files =
+            count_markdown_files(&self.canonical_dir.join("namespaces"));
         let canonical_daily_files = std::fs::read_dir(&self.canonical_dir)
             .ok()
             .into_iter()
@@ -852,6 +876,7 @@ impl Memory {
             fts_rows: fts_rows as usize,
             fts_consistent: memory_rows == fts_rows,
             canonical_root_exists,
+            canonical_namespace_files,
             canonical_daily_files,
             canonical_event_logs,
             person_rows: person_rows as usize,
@@ -955,46 +980,117 @@ impl Memory {
 
     fn rebuild_root_memory_file(&self) -> Result<()> {
         let file = self.canonical_dir.join("MEMORY.md");
+        let index_file = self.canonical_dir.join("INDEX.md");
+        let namespaces_dir = self.canonical_dir.join("namespaces");
         let mut stmt = self.conn.prepare(
-            "SELECT kind, content, scope, sensitivity, spoken_policy
+            "SELECT id, kind, content, scope, sensitivity, spoken_policy
              FROM memories
              WHERE promoted = 1
              ORDER BY display_order ASC, accessed_ms DESC, id ASC",
         )?;
-        let lines = stmt
+        let records = stmt
             .query_map([], |row| {
                 Ok((
-                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(0)?,
                     row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
                     policy::MemoryPolicyMetadata {
-                        scope: policy::MemoryScope::from_storage(&row.get::<_, String>(2)?),
+                        scope: policy::MemoryScope::from_storage(&row.get::<_, String>(3)?),
                         sensitivity: policy::MemorySensitivity::from_storage(
-                            &row.get::<_, String>(3)?,
+                            &row.get::<_, String>(4)?,
                         ),
                         spoken_policy: policy::SpokenMemoryPolicy::from_storage(
-                            &row.get::<_, String>(4)?,
+                            &row.get::<_, String>(5)?,
                         ),
                     },
                 ))
             })?
             .filter_map(|row| row.ok())
-            .filter_map(|(kind, content, metadata)| {
-                let allowed = policy::assess_memory_read(
-                    metadata,
-                    policy::MemoryReadContext::shared_room_voice(),
-                )
-                .allowed;
-                allowed.then(|| format!("- [{}] {}\n", kind, content))
-            })
             .collect::<Vec<_>>();
 
-        if lines.is_empty() {
+        let _ = std::fs::remove_dir_all(&namespaces_dir);
+        if records.is_empty() {
             let _ = std::fs::remove_file(&file);
+            let _ = std::fs::remove_file(&index_file);
+            return Ok(());
+        }
+
+        std::fs::create_dir_all(&namespaces_dir)?;
+
+        let mut namespace_index: std::collections::BTreeMap<String, Vec<String>> =
+            std::collections::BTreeMap::new();
+        let mut root_lines = Vec::new();
+
+        for (id, kind, content, metadata) in &records {
+            let namespace = canonical_namespace(kind, *metadata);
+            let shared_safe = policy::assess_memory_read(
+                *metadata,
+                policy::MemoryReadContext::shared_room_voice(),
+            )
+            .allowed;
+            if shared_safe {
+                root_lines.push(format!("- [mem:{id}] [{kind}] {content}\n"));
+            }
+
+            let namespace_line = if shared_safe {
+                format!("- [mem:{id}] [{kind}] {content}\n")
+            } else {
+                format!(
+                    "- [mem:{id}] redacted ({}, {}, {})\n",
+                    metadata.scope.as_str(),
+                    metadata.sensitivity.as_str(),
+                    metadata.spoken_policy.as_str()
+                )
+            };
+            namespace_index
+                .entry(namespace)
+                .or_default()
+                .push(namespace_line);
+        }
+
+        let mut index_text =
+            String::from("# GenieClaw Memory Index\n\nGenerated local durable-memory map.\n\n");
+        index_text.push_str("## Namespaces\n\n");
+
+        for (namespace, lines) in &namespace_index {
+            let relative = canonical_namespace_note_relative(namespace);
+            let note_path = self.canonical_dir.join(&relative);
+            if let Some(parent) = note_path.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+
+            let mut note_text = format!(
+                "---\nnamespace: {}\nkind: durable-memory\nsource: genie-core\n---\n\n# {}\n\n",
+                namespace, namespace
+            );
+            for line in lines {
+                note_text.push_str(line);
+            }
+            std::fs::write(note_path, note_text)?;
+
+            index_text.push_str(&format!(
+                "- [{}]({}) — {} durable entr{}\n",
+                namespace,
+                relative,
+                lines.len(),
+                if lines.len() == 1 { "y" } else { "ies" }
+            ));
+        }
+
+        std::fs::write(index_file, index_text)?;
+
+        if root_lines.is_empty() {
+            let mut text = String::from("# GenieClaw Durable Memory\n\n");
+            text.push_str(
+                "No promoted memories are currently safe for shared-room disclosure.\n\nSee [INDEX.md](INDEX.md) for the local namespace map.\n",
+            );
+            std::fs::write(file, text)?;
             return Ok(());
         }
 
         let mut text = String::from("# GenieClaw Durable Memory\n\n");
-        for line in lines {
+        text.push_str("See [INDEX.md](INDEX.md) for namespace notes.\n\n");
+        for line in root_lines {
             text.push_str(&line);
         }
         std::fs::write(file, text)?;
@@ -1039,6 +1135,8 @@ fn read_managed_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<ManagedMemory
         scope: row.get::<_, String>(7)?,
         sensitivity: row.get::<_, String>(8)?,
         spoken_policy: row.get::<_, String>(9)?,
+        namespace: String::new(),
+        canonical_note: None,
         display_order: row.get::<_, i64>(10).unwrap_or(i64::MAX),
     })
 }
@@ -1112,6 +1210,92 @@ fn canonical_event_file(canonical_dir: &Path, ts_ms: u64) -> PathBuf {
     canonical_dir
         .join("events")
         .join(format!("{}.jsonl", canonical_date(ts_ms)))
+}
+
+fn canonical_namespace(kind: &str, metadata: policy::MemoryPolicyMetadata) -> String {
+    let lower = kind.trim().to_ascii_lowercase();
+    let leaf = lower
+        .strip_prefix("person_")
+        .or_else(|| lower.strip_prefix("private_"))
+        .or_else(|| lower.strip_prefix("session_"))
+        .or_else(|| lower.strip_prefix("household_"))
+        .unwrap_or(&lower)
+        .to_string();
+    let leaf = sanitize_namespace_segment(&leaf);
+    format!(
+        "{}.{}",
+        metadata.scope.as_str(),
+        if leaf.is_empty() { "general" } else { &leaf }
+    )
+}
+
+fn canonical_namespace_note_relative(namespace: &str) -> String {
+    let mut parts = namespace
+        .split('.')
+        .map(sanitize_namespace_segment)
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>();
+    if parts.is_empty() {
+        parts.push("general".into());
+    }
+    let leaf = parts.pop().unwrap_or_else(|| "general".into());
+    let mut path = PathBuf::from("namespaces");
+    for part in parts {
+        path.push(part);
+    }
+    path.push(format!("{leaf}.md"));
+    path.to_string_lossy().into_owned()
+}
+
+fn sanitize_namespace_segment(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_dash = false;
+    for ch in value.chars() {
+        let next = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else if ch == '_' || ch == '-' || ch == ' ' || ch == '.' {
+            '-'
+        } else {
+            continue;
+        };
+        if next == '-' {
+            if last_dash {
+                continue;
+            }
+            last_dash = true;
+        } else {
+            last_dash = false;
+        }
+        out.push(next);
+    }
+    out.trim_matches('-').to_string()
+}
+
+fn count_markdown_files(root: &Path) -> usize {
+    if !root.exists() {
+        return 0;
+    }
+    let mut count = 0;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
+        for entry in entries.filter_map(|entry| entry.ok()) {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| ext.eq_ignore_ascii_case("md"))
+                .unwrap_or(false)
+            {
+                count += 1;
+            }
+        }
+    }
+    count
 }
 
 /// Word overlap ratio between two strings (Jaccard-like).
@@ -1540,6 +1724,19 @@ mod tests {
         let root = mem.canonical_dir.join("MEMORY.md");
         let text = std::fs::read_to_string(root).unwrap();
         assert!(text.contains("User's favorite color is green"));
+        assert!(text.contains("INDEX.md"));
+    }
+
+    #[test]
+    fn promotion_writes_namespace_note_for_household_memory() {
+        let mem = temp_memory();
+        let id = mem.store("preference", "User likes ginger tea").unwrap();
+        mem.mark_promoted(id).unwrap();
+
+        let note = mem.canonical_dir.join("namespaces/household/preference.md");
+        let text = std::fs::read_to_string(note).unwrap();
+        assert!(text.contains("namespace: household.preference"));
+        assert!(text.contains("User likes ginger tea"));
     }
 
     #[test]
@@ -1552,6 +1749,21 @@ mod tests {
 
         let root = mem.canonical_dir.join("MEMORY.md");
         let text = std::fs::read_to_string(root).unwrap_or_default();
+        assert!(!text.contains("Maya likes oat milk"));
+    }
+
+    #[test]
+    fn promotion_redacts_person_memory_in_namespace_note() {
+        let mem = temp_memory();
+        let id = mem
+            .store("person_preference", "Maya likes oat milk")
+            .unwrap();
+        mem.mark_promoted(id).unwrap();
+
+        let note = mem.canonical_dir.join("namespaces/person/preference.md");
+        let text = std::fs::read_to_string(note).unwrap();
+        assert!(text.contains("namespace: person.preference"));
+        assert!(text.contains("redacted"));
         assert!(!text.contains("Maya likes oat milk"));
     }
 
@@ -1617,5 +1829,20 @@ mod tests {
         let first_pos = text.find("first durable fact").unwrap();
         let second_pos = text.find("second durable fact").unwrap();
         assert!(second_pos < first_pos);
+    }
+
+    #[test]
+    fn list_managed_reports_namespace_and_canonical_note() {
+        let mem = temp_memory();
+        let id = mem.store("preference", "User likes lemon tea").unwrap();
+        mem.mark_promoted(id).unwrap();
+
+        let entries = mem.list_managed(10).unwrap();
+        let entry = entries.into_iter().find(|entry| entry.id == id).unwrap();
+        assert_eq!(entry.namespace, "household.preference");
+        assert_eq!(
+            entry.canonical_note.as_deref(),
+            Some("memory/namespaces/household/preference.md")
+        );
     }
 }

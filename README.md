@@ -273,6 +273,9 @@ The current memory system is built for a shared-room appliance:
 - memory rows persist policy metadata for `scope`, `sensitivity`, and `spoken_policy`
 - prompt context, memory recall, and voice bootstrap all use shared-room-safe filtering by default
 - promoted durable memory in `memory/MEMORY.md` only includes memories safe for shared household disclosure
+- promoted durable memory is also projected into a local namespace tree under `memory/namespaces/`
+- `memory/INDEX.md` acts as the generated entry point for the durable memory tree
+- person/private/restricted durable namespace notes are kept structured, but non-shared-safe entries are redacted in the markdown projection by default
 
 ## License
 

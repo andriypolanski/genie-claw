@@ -907,7 +907,7 @@ impl ToolDispatcher {
         };
 
         Ok(format!(
-            "Memory status: {}. Rows: {}. FTS rows: {}. FTS consistent: {}. Promoted memories: {}. Canonical root: {}. Daily notes: {}. Event logs: {}. Person-scoped memories: {}. Private memories: {}. Restricted memories: {}.",
+            "Memory status: {}. Rows: {}. FTS rows: {}. FTS consistent: {}. Promoted memories: {}. Canonical root: {}. Namespace notes: {}. Daily notes: {}. Event logs: {}. Person-scoped memories: {}. Private memories: {}. Restricted memories: {}.",
             state,
             health.memory_rows,
             health.fts_rows,
@@ -918,6 +918,7 @@ impl ToolDispatcher {
             } else {
                 "missing"
             },
+            health.canonical_namespace_files,
             health.canonical_daily_files,
             health.canonical_event_logs,
             health.person_rows,

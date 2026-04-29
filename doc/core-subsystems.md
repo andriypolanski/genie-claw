@@ -156,9 +156,11 @@ Responsibilities:
 Current practical behavior:
 
 - each memory DB now has a sibling `memory/` directory with:
+  - `INDEX.md` as the generated durable-memory entry point
   - daily notes like `YYYY-MM-DD.md`
   - append-only event logs under `events/YYYY-MM-DD.jsonl`
   - durable promoted entries in `MEMORY.md`
+  - namespace notes under `namespaces/<scope>/<kind>.md`
 - each stored memory now persists policy metadata in SQLite:
   - `scope`
   - `sensitivity`
@@ -173,6 +175,8 @@ Current practical behavior:
 - memory recall also respects persisted policy metadata, with shared-room voice as the conservative default
 - static prompt and voice bootstrap context now use the same shared-room-safe memory filtering
 - promotion to `memory/MEMORY.md` is limited to memories that are safe for shared household disclosure
+- promoted memories are projected into a Dendron-style local namespace tree for operator browsing without turning the runtime into a PKM product
+- non-shared-safe promoted memories stay represented in namespace notes, but their content is redacted in markdown by default
 
 ## Profile Ingest
 
