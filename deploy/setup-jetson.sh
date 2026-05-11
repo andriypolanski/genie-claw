@@ -146,6 +146,16 @@ fi
 echo "[6/6] Enabling systemd services..."
 sudo systemctl daemon-reload
 
+# Enable the umbrella geniepod.target first. Every genie-* service is
+# WantedBy=geniepod.target, so without enabling the target itself none
+# of them auto-start on reboot — even though `systemctl enable <svc>`
+# returns success (it only creates the .wants symlink under the target).
+if sudo systemctl enable geniepod.target 2>/dev/null; then
+    echo "  Enabled: geniepod.target"
+else
+    echo "  WARN: geniepod.target unit not found — services will not auto-start"
+fi
+
 # Enable core services. genie-audio runs the I2S/AHUB route setup at boot
 # (no-op if /opt/geniepod/bin/genie-audio-init is missing, see ConditionPathExists).
 for svc in homeassistant genie-audio genie-llm genie-core genie-governor genie-health genie-api genie-mqtt; do
