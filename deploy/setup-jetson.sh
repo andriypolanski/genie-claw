@@ -19,6 +19,18 @@ sudo mkdir -p "$GENIEPOD_DIR/bin" "$GENIEPOD_DIR/docker" "$MODEL_DIR" "$DATA_DIR
 sudo mkdir -p /etc/systemd/system/genie-llm.service.d
 sudo chown -R "$(whoami):$(whoami)" "$GENIEPOD_DIR" /run/geniepod
 
+# Clean up stale systemd drop-ins that legacy installs may have left behind.
+# These override the canonical ExecStart in /etc/systemd/system/genie-llm.service
+# and silently mask new flags (--cache-type-k, --ctx-size, etc.) from PR-deployed
+# unit files. The repo unit IS the source of truth; per-host customizations should
+# live in geniepod.toml, not in systemd overrides.
+for drop_in in ctx.conf model.conf; do
+    if [ -f "/etc/systemd/system/genie-llm.service.d/$drop_in" ]; then
+        echo "  Removing stale systemd drop-in: $drop_in"
+        sudo rm -f "/etc/systemd/system/genie-llm.service.d/$drop_in"
+    fi
+done
+
 # 2. Check binaries.
 echo "[2/6] Checking binaries..."
 for bin in genie-core genie-governor genie-health genie-api genie-ctl; do
