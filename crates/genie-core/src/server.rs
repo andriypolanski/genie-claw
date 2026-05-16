@@ -972,6 +972,7 @@ async fn handle_health(
     let resp = serde_json::json!({
         "status": status,
         "llm": if llm_ok { "connected" } else { "offline" },
+        "llm_backend": llm.backend_name(),
         "memories": mem_count,
         "conversations": conv_count,
         "mem_available_mb": mem_avail,
@@ -1745,7 +1746,7 @@ fn status_text(code: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConnectivityState, StreamMode, detect_stream_mode, handle_actuation_actions,
+        ConnectivityState, StreamMode, detect_stream_mode, handle_actuation_actions, handle_health,
         handle_runtime_contract, handle_web_search, handle_web_search_status,
         overall_health_status, should_summarize_tool_result,
     };
@@ -1828,6 +1829,50 @@ mod tests {
             overall_health_status(true, ConnectivityState::Offline),
             "degraded"
         );
+    }
+
+    #[tokio::test]
+    async fn health_endpoint_reports_llm_backend() {
+        let unique = format!(
+            "genie-health-backend-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let temp = std::env::temp_dir();
+        let memory_path = temp.join(format!("{unique}-memory.db"));
+        let conversations_path = temp.join(format!("{unique}-conversations.db"));
+        let _ = std::fs::remove_file(&memory_path);
+        let _ = std::fs::remove_file(&conversations_path);
+
+        let llm = crate::llm::LlmClient::from_genie_ai_runtime_url("http://127.0.0.1:1/health");
+        let tools = ToolDispatcher::new(None);
+        let connectivity = NullConnectivityController::from_config(&ConnectivityConfig::default());
+        let memory = Memory::open(&memory_path).unwrap();
+        let conversations = ConversationStore::open(&conversations_path).unwrap();
+
+        let (status, _, body) = handle_health(
+            &llm,
+            &tools,
+            &connectivity,
+            &memory,
+            &conversations,
+            "system prompt",
+            12,
+            ModelFamily::Phi,
+            "",
+        )
+        .await;
+
+        assert_eq!(status, 200);
+        let parsed: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed["llm"], "offline");
+        assert_eq!(parsed["llm_backend"], "genie-ai-runtime");
+
+        let _ = std::fs::remove_file(&memory_path);
+        let _ = std::fs::remove_file(&conversations_path);
     }
 
     #[tokio::test]

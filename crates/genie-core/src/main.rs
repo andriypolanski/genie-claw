@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
     // Build shared components.
     let llm_url = &config.services.llm.url;
     let llm = llm::LlmClient::from_url(llm_url);
+    tracing::info!(backend = %llm.backend_name(), "LLM backend configured");
 
     let ha = ha::provider_from_config(&config);
 
