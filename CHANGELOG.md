@@ -4,6 +4,18 @@
 
 ### Added
 
+- `.github/workflows/audit.yml` and `deny.toml` — supply-chain audit
+  workflow for issue #34. Runs `rustsec/audit-check` plus
+  `EmbarkStudios/cargo-deny-action` on every `Cargo.{toml,lock}` /
+  `deny.toml` / workflow change and on a Monday-06:00-UTC cron.
+  `deny.toml` codifies the project's license policy
+  (`AGPL-3.0-only` for genie-claw itself; the standard permissive
+  set plus `CDLA-Permissive-2.0` for webpki-roots and `OpenSSL` for
+  ring on the dependency side), pins all packages to crates.io as the
+  only allowed source so a future git dep requires an explicit policy
+  update, and currently runs `wildcards = "allow"` because workspace
+  path-deps would otherwise trip the public-crate exemption logic.
+  Audit badge added at the top of the README.
 - `.github/workflows/cross.yml` — aarch64 Jetson cross-compile workflow
   for issue #34. Installs `gcc-aarch64-linux-gnu` /
   `g++-aarch64-linux-gnu`, adds the `aarch64-unknown-linux-gnu` Rust
