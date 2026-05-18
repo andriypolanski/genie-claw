@@ -649,9 +649,7 @@ impl Config {
     /// listens on all interfaces.
     pub fn core_http_addr(&self) -> String {
         let host = self.core.bind_host.trim();
-        let host = if host.is_empty() {
-            "127.0.0.1"
-        } else if host == "0.0.0.0" || host == "::" {
+        let host = if host.is_empty() || host == "0.0.0.0" || host == "::" {
             "127.0.0.1"
         } else {
             host
