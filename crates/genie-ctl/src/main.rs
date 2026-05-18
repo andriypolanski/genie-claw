@@ -34,22 +34,8 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
 const GOVERNOR_SOCK: &str = "/run/geniepod/governor.sock";
 
-/// HTTP `host:port` for genie-core, from `[core].bind_host` and `[core].port`.
-fn core_addr_from_config(config: &Config) -> String {
-    let host = config.core.bind_host.trim();
-    let host = if host.is_empty() {
-        "127.0.0.1"
-    } else if host == "0.0.0.0" || host == "::" {
-        // genie-core may listen on all interfaces; local CLI should use loopback.
-        "127.0.0.1"
-    } else {
-        host
-    };
-    format!("{host}:{}", config.core.port)
-}
-
 fn load_core_addr() -> Result<String> {
-    Ok(core_addr_from_config(&Config::load()?))
+    Ok(Config::load()?.core_http_addr())
 }
 const SKILL_RESTART_HINT: &str =
     "Restart genie-core to load skill changes, or wait until the next startup.";
@@ -1784,7 +1770,7 @@ mod tests {
             connectivity: Default::default(),
         };
 
-        assert_eq!(super::core_addr_from_config(&config), "127.0.0.1:3001");
+        assert_eq!(config.core_http_addr(), "127.0.0.1:3001");
     }
 
     #[test]
@@ -1809,7 +1795,7 @@ mod tests {
             connectivity: Default::default(),
         };
 
-        assert_eq!(super::core_addr_from_config(&config), "127.0.0.1:3000");
+        assert_eq!(config.core_http_addr(), "127.0.0.1:3000");
     }
 
     #[test]
