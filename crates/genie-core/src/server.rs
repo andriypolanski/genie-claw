@@ -2260,8 +2260,9 @@ mod tests {
                 });
 
                 // Connect a raw TCP client.
-                let mut stream =
-                    TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap();
+                let mut stream = TcpStream::connect(format!("127.0.0.1:{port}"))
+                    .await
+                    .unwrap();
 
                 // POST /api/chat/stream with a non-empty message body.
                 let body = r#"{"message":"ping"}"#;
@@ -2280,11 +2281,7 @@ mod tests {
                 // Drain a small read buffer so the server can finish writing
                 // its SSE header + start event before we check the notify.
                 let mut buf = [0u8; 512];
-                let _ = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    stream.read(&mut buf),
-                )
-                .await;
+                let _ = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await;
 
                 // Wait until the producer has handed at least one token to
                 // on_token (and therefore started its inter-token sleep).

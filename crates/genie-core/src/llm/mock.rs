@@ -76,10 +76,7 @@ impl MockLlmBackend {
     /// Fire `notify` immediately after the **first** token is passed to the
     /// `on_token` callback. Lets a test know the stream has started before
     /// dropping the TCP connection.
-    pub fn with_first_token_notify(
-        mut self,
-        notify: std::sync::Arc<tokio::sync::Notify>,
-    ) -> Self {
+    pub fn with_first_token_notify(mut self, notify: std::sync::Arc<tokio::sync::Notify>) -> Self {
         self.first_token_notif = Some(notify);
         self
     }
