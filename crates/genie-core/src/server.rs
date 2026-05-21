@@ -130,7 +130,16 @@ impl ChatServer {
         let addr = format!("{}:{}", bind_host, port);
         let listener = TcpListener::bind(&addr).await?;
         tracing::info!(addr = %addr, "genie-core HTTP server listening");
+        self.serve_listener(listener).await
+    }
 
+    /// Accept connections from an already-bound `TcpListener`.
+    ///
+    /// Prefer [`serve`](Self::serve) for production use. This entry-point
+    /// exists so tests can pre-bind to port 0, obtain the OS-assigned port,
+    /// and hand the listener directly to the server — avoiding the
+    /// bind-drop-rebind race that a port-0 `serve()` call would require.
+    pub(crate) async fn serve_listener(self, listener: TcpListener) -> Result<()> {
         let ctx = Rc::new(self);
         let local = tokio::task::LocalSet::new();
         local
@@ -2168,5 +2177,136 @@ mod tests {
         use std::io;
         let e = anyhow::Error::from(io::Error::new(io::ErrorKind::TimedOut, "timed out"));
         assert!(!is_client_disconnect_error(&e));
+    }
+
+    /// Smoke test for issue #124: dropping a real TCP connection mid-stream
+    /// must cancel the LLM producer task, not let it run to completion.
+    ///
+    /// This test starts a real `ChatServer` on a loopback port, opens a TCP
+    /// connection, sends an HTTP POST to `/api/chat/stream`, waits for the
+    /// first SSE token to arrive (proof the producer is live), then drops the
+    /// TCP socket and asserts that the slow producer never completed.
+    #[tokio::test(flavor = "current_thread")]
+    async fn real_server_client_disconnect_cancels_llm_producer() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::net::TcpStream;
+
+        use crate::connectivity::NullConnectivityController;
+        use crate::conversation::ConversationStore;
+        use crate::llm::{LlmClient, MockLlmBackend};
+        use crate::memory::Memory;
+        use crate::prompt::ModelFamily;
+        use crate::tools::ToolDispatcher;
+        use genie_common::config::ConnectivityConfig;
+
+        // Shared state: did the producer run all the way to the end?
+        let producer_finished = Arc::new(AtomicBool::new(false));
+        // Signal from producer → test: "first token has been handed to on_token".
+        let first_token_sent = Arc::new(tokio::sync::Notify::new());
+
+        // Slow backend: emits one word, notifies, then sleeps 60 s between
+        // each subsequent word.  The test disconnects after the notification,
+        // so the producer must be cancelled while in that sleep.
+        let slow_backend = MockLlmBackend::new(["hello world from genie"])
+            .with_first_token_notify(Arc::clone(&first_token_sent))
+            .with_token_delay(Duration::from_secs(60))
+            .with_completion_flag(Arc::clone(&producer_finished));
+
+        // Unique temp paths so parallel test runs don't share SQLite WAL files.
+        let uid = format!(
+            "genie-disconnect-smoke-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let tmp = std::env::temp_dir();
+        let memory_path = tmp.join(format!("{uid}-memory.db"));
+        let conv_path = tmp.join(format!("{uid}-conv.db"));
+
+        let server = super::ChatServer::new(
+            LlmClient::from_backend(slow_backend),
+            ToolDispatcher::new(None),
+            std::sync::Arc::new(NullConnectivityController::from_config(
+                &ConnectivityConfig::default(),
+            )),
+            Memory::open(&memory_path).unwrap(),
+            ConversationStore::open(&conv_path).unwrap(),
+            "You are a helpful assistant.".into(),
+            10,
+            ModelFamily::Phi,
+            "".into(),
+        )
+        .unwrap();
+
+        // Pre-bind to port 0 so the OS assigns a free port; hand the listener
+        // directly to serve_listener() — no bind-drop-rebind race.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // Run server in a local task (ChatServer uses Rc internally).
+        let local = tokio::task::LocalSet::new();
+        let first_token_sent_clone = Arc::clone(&first_token_sent);
+        let producer_finished_clone = Arc::clone(&producer_finished);
+
+        local
+            .run_until(async move {
+                tokio::task::spawn_local(async move {
+                    let _ = server.serve_listener(listener).await;
+                });
+
+                // Connect a raw TCP client.
+                let mut stream =
+                    TcpStream::connect(format!("127.0.0.1:{port}")).await.unwrap();
+
+                // POST /api/chat/stream with a non-empty message body.
+                let body = r#"{"message":"ping"}"#;
+                let request = format!(
+                    "POST /api/chat/stream HTTP/1.1\r\n\
+                     Host: localhost\r\n\
+                     Content-Type: application/json\r\n\
+                     Content-Length: {}\r\n\
+                     \r\n\
+                     {}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(request.as_bytes()).await.unwrap();
+
+                // Drain a small read buffer so the server can finish writing
+                // its SSE header + start event before we check the notify.
+                let mut buf = [0u8; 512];
+                let _ = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    stream.read(&mut buf),
+                )
+                .await;
+
+                // Wait until the producer has handed at least one token to
+                // on_token (and therefore started its inter-token sleep).
+                tokio::time::timeout(Duration::from_secs(5), first_token_sent_clone.notified())
+                    .await
+                    .expect("timed out waiting for first SSE token from mock LLM");
+
+                // Drop the TCP connection — this is the disconnect under test.
+                drop(stream);
+
+                // Give the server one scheduler pass to detect the broken pipe
+                // and cancel the producer future.
+                tokio::time::sleep(Duration::from_millis(250)).await;
+
+                assert!(
+                    !producer_finished_clone.load(Ordering::SeqCst),
+                    "LLM producer must be cancelled on client disconnect, not run to completion"
+                );
+
+                let _ = std::fs::remove_file(&memory_path);
+                let _ = std::fs::remove_file(&conv_path);
+            })
+            .await;
     }
 }

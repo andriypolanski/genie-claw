@@ -96,6 +96,15 @@ impl LlmClient {
         }
     }
 
+    /// Wrap any `LlmBackendClient` implementation in a client facade.
+    /// Primarily useful in tests that need a custom backend (e.g. a slow
+    /// streaming backend for client-disconnect smoke tests).
+    pub fn from_backend(backend: impl LlmBackendClient + 'static) -> Self {
+        Self {
+            backend: Box::new(backend),
+        }
+    }
+
     pub fn backend_name(&self) -> &str {
         self.backend.backend_name()
     }
