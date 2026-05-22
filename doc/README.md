@@ -11,7 +11,7 @@ repo boundary inside the larger Genie ecosystem:
 - core subsystems such as memory, voice, security, and connectivity
 - deployment assets and operational guidance
 - repository layout and code ownership map
-- long-term boundary with `genie-os`, `genie-home-runtime`, `genie-ai-runtime`, and app layers
+- long-term boundary with `genie-os`, `genie-voice-runtime`, `genie-home-runtime`, `genie-ai-runtime`, and app layers
 
 Where current code is transitional, the docs call that out explicitly.
 
@@ -36,7 +36,7 @@ Where current code is transitional, the docs call that out explicitly.
 GenieClaw is a local-first home AI runtime centered on `genie-core`.
 
 - `genie-core` is the main orchestrator.
-  It serves the chat API on port `3000`, can run a local REPL on stdin, and can run the voice loop.
+  It serves the chat API on port `3000`, can run a local REPL on stdin, and currently runs the transitional voice adapter.
 - `genie-api` is a separate dashboard/status service.
   It exposes dashboard HTML and system status backed by governor and health databases.
 - `genie-governor` manages mode changes, memory-pressure reactions, and service lifecycle decisions.
@@ -68,4 +68,4 @@ There are a few intentional limits:
 
 - Hardware behavior that depends on a specific Jetson image, kernel, or manual systemd override is documented as operational guidance, not as a stable code contract.
 - `llama.cpp`, Home Assistant, Piper, Whisper, and Telegram Bot API internals are external dependencies. This repo documents how GenieClaw integrates with them, not their full upstream behavior.
-- `genie-os`, `genie-home-runtime`, and `genie-ai-runtime` are documented as architectural boundaries unless code in this repo already implements a transitional adapter.
+- `genie-os`, `genie-voice-runtime`, `genie-home-runtime`, and `genie-ai-runtime` are documented as architectural boundaries unless code in this repo already implements a transitional adapter.

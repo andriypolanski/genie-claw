@@ -91,10 +91,13 @@ The only network egress GenieClaw makes by default is the optional
 no account, no telemetry). Disable it via `[web_search] enabled = false`
 and the appliance is fully air-gappable.
 
-GenieClaw owns the **agent layer**: prompts, memory, tool routing, voice
-orchestration, channel adapters. It does **not** own the LLM kernels (see
-[`genie-ai-runtime`](https://github.com/GeniePod/genie-ai-runtime)) or the
-eventual device-control runtime (`genie-home-runtime`, planned). See
+GenieClaw owns the **agent layer**: prompts, memory, tool routing, smart-home
+intent, spoken response behavior, and channel adapters. It does **not** own the
+LLM kernels (see
+[`genie-ai-runtime`](https://github.com/GeniePod/genie-ai-runtime)), the
+long-term voice pipeline (see
+[`genie-voice-runtime`](https://github.com/GeniePod/genie-voice-runtime)), or
+the eventual device-control runtime (`genie-home-runtime`, planned). See
 [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full stack.
 
 ## Roadmap
@@ -169,7 +172,7 @@ world for the home.
 This repo is the Rust agent runtime for a very specific product shape:
 
 - a Jetson-first home AI appliance
-- a full local voice pipeline: wake word, STT, LLM orchestration, tools, and TTS
+- spoken interaction through a transitional local voice adapter while the pipeline moves to `genie-voice-runtime`
 - a local household memory system
 - safe handoff to a home-control runtime
 - transitional Home Assistant support while `genie-home-runtime` is not yet split out
@@ -189,9 +192,10 @@ components:
 
 - custom Jetson hardware
 - `genie-os`: custom L4T image, drivers, OTA, and service supervision
+- `genie-voice-runtime`: wake word, VAD, STT, TTS, audio streaming, and voice session protocol
 - `genie-home-runtime`: Rust AI-native home automation runtime and final actuation safety layer
 - `genie-ai-runtime`: Jetson-only C++ LLM runtime customized from `llama.cpp`
-- `genie-claw`: this repo, the Rust agent layer for voice, memory, tools, skills, and channels
+- `genie-claw`: this repo, the Rust agent layer for prompt policy, memory, tools, skills, smart-home intent, and channels
 - application layer: web and mobile app surfaces
 
 This repo should not become all five layers. It can keep transitional adapters
@@ -202,7 +206,7 @@ OS bring-up, and product apps behind explicit boundaries.
 
 Today, the system can:
 
-- run a local LLM-backed chat and voice loop
+- run local LLM-backed chat and the current transitional voice loop
 - stay flexible around local model choice inside the Jetson deployment
 - expose a local HTTP API and web UI
 - store conversation history and household memory in SQLite
@@ -244,6 +248,7 @@ agent operation:
 - a general-purpose agent platform
 - a messaging-bot framework
 - the custom Jetson OS layer
+- the long-term voice/audio runtime
 - the final home automation and actuation runtime
 - the Jetson CUDA inference runtime
 - the whole product UI or mobile app
@@ -296,7 +301,7 @@ assistant that still feels fast and reliable on 8 GB unified memory.
 
 | Crate | Purpose |
 |-------|---------|
-| `genie-core` | Main runtime: prompt building, tools, memory, voice loop, HTTP API |
+| `genie-core` | Main runtime: prompt building, tools, memory, HTTP API, and transitional voice adapter |
 | `genie-common` | Shared config, mode types, and tegrastats parsing |
 | `genie-ctl` | Local CLI for chat, status, tools, health, and diagnostics |
 | `genie-governor` | Resource governor and service lifecycle controller |
