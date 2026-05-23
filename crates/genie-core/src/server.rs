@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 
 use crate::connectivity::{ConnectivityController, ConnectivityHealth, ConnectivityState};
 use crate::conversation::ConversationStore;
-use crate::llm::{LlmClient, Message};
+use crate::llm::{LlmClient, LlmRequestHints, Message};
 use crate::memory::Memory;
 use crate::prompt::ModelFamily;
 use crate::reasoning::InteractionKind;
@@ -589,9 +589,11 @@ async fn handle_chat_stream(
     // their mutable borrow on `writer` released — before we write the final
     // "done" event below.
     let (llm_result, mut state) = {
-        let producer = llm.chat_stream(&messages, Some(512), move |token| {
-            let _ = tx.send(token.to_string());
-        });
+        let request_hints = LlmRequestHints::agent_turn(&conv_id, 512);
+        let producer =
+            llm.chat_stream_with_hints(&messages, Some(512), &request_hints, move |token| {
+                let _ = tx.send(token.to_string());
+            });
 
         let consumer = async {
             let mut state = StreamState {
@@ -779,7 +781,10 @@ pub async fn process_chat_turn(
         "applied reasoning mode for chat turn"
     );
 
-    let llm_response = llm.chat(&messages, Some(512)).await?;
+    let request_hints = LlmRequestHints::agent_turn(conv_id, 512);
+    let llm_response = llm
+        .chat_with_hints(&messages, Some(512), &request_hints)
+        .await?;
 
     let mut tool_name: Option<String> = None;
     let final_response = if let Some(tool_result) = crate::tools::try_tool_call_with_context(
@@ -878,7 +883,8 @@ async fn finalize_tool_turn(
             InteractionKind::ToolSummary,
         );
 
-        llm.chat(&summary_msgs, Some(128))
+        let summary_hints = LlmRequestHints::tool_summary(conv_id, 128);
+        llm.chat_with_hints(&summary_msgs, Some(128), &summary_hints)
             .await
             .unwrap_or_else(|_| tool_result.output.clone())
     } else {
@@ -1702,8 +1708,16 @@ async fn handle_openai_chat(
         "applied reasoning mode for OpenAI bridge"
     );
 
+    let bridge_hints = llm_hints_from_openai_body(&parsed, max_tokens);
+
     // Call LLM.
-    let llm_response = match llm.chat(&llm_messages, Some(max_tokens)).await {
+    let llm_response_result = if let Some(hints) = bridge_hints.as_ref() {
+        llm.chat_with_hints(&llm_messages, Some(max_tokens), hints)
+            .await
+    } else {
+        llm.chat(&llm_messages, Some(max_tokens)).await
+    };
+    let llm_response = match llm_response_result {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(error = %e, "LLM error in OpenAI bridge");
@@ -1757,9 +1771,19 @@ async fn handle_openai_chat(
                 InteractionKind::ToolSummary,
             );
 
-            llm.chat(&summary_msgs, Some(128))
-                .await
-                .unwrap_or_else(|_| tool_result.output.clone())
+            if let Some(hints) = bridge_hints.as_ref() {
+                let summary_hints = LlmRequestHints::tool_summary(
+                    hints.session_id.clone().unwrap_or_default(),
+                    128,
+                );
+                llm.chat_with_hints(&summary_msgs, Some(128), &summary_hints)
+                    .await
+                    .unwrap_or_else(|_| tool_result.output.clone())
+            } else {
+                llm.chat(&summary_msgs, Some(128))
+                    .await
+                    .unwrap_or_else(|_| tool_result.output.clone())
+            }
         } else {
             tool_result.output
         }
@@ -1803,6 +1827,55 @@ fn openai_chat_response(model: &str, content: &str) -> (u16, &'static str, Strin
     });
 
     (200, "application/json", response.to_string())
+}
+
+fn llm_hints_from_openai_body(
+    parsed: &serde_json::Value,
+    max_tokens: u32,
+) -> Option<LlmRequestHints> {
+    let session_id = parsed
+        .get("conversation_id")
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            parsed
+                .get("nvext")
+                .and_then(|v| v.get("agent_hints"))
+                .and_then(|v| v.get("session_id"))
+                .and_then(|v| v.as_str())
+        })?
+        .trim();
+
+    if session_id.is_empty() {
+        return None;
+    }
+
+    let mut hints = LlmRequestHints::agent_turn(session_id, max_tokens);
+    if let Some(priority) = parsed
+        .get("nvext")
+        .and_then(|v| v.get("agent_hints"))
+        .and_then(|v| v.get("priority"))
+        .and_then(|v| v.as_i64())
+    {
+        hints.priority = Some(priority.clamp(i32::MIN as i64, i32::MAX as i64) as i32);
+    }
+    if let Some(osl) = parsed
+        .get("nvext")
+        .and_then(|v| v.get("agent_hints"))
+        .and_then(|v| v.get("osl"))
+        .and_then(|v| v.as_u64())
+    {
+        hints.output_sequence_length = Some(osl.min(u32::MAX as u64) as u32);
+    }
+    if let Some(speculative_prefill) = parsed
+        .get("nvext")
+        .and_then(|v| v.get("agent_hints"))
+        .and_then(|v| v.get("speculative_prefill"))
+        .and_then(|v| v.as_bool())
+    {
+        hints.speculative_prefill = speculative_prefill;
+    }
+
+    Some(hints)
 }
 
 fn parse_openai_messages(messages: &[serde_json::Value], max_history: usize) -> Vec<Message> {

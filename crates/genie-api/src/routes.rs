@@ -225,7 +225,7 @@ fn dashboard_service_targets(config: &Config) -> Vec<ServiceTarget> {
         ServiceTarget {
             service: "core".into(),
             unit: config.services.core.systemd_unit.clone(),
-            latency_url: Some(config.services.core.url.clone()),
+            latency_url: Some(config.core_health_url()),
             disabled_reason: None,
         },
         ServiceTarget {
@@ -236,8 +236,8 @@ fn dashboard_service_targets(config: &Config) -> Vec<ServiceTarget> {
         },
         ServiceTarget {
             service: "api".into(),
-            unit: "genie-api.service".into(),
-            latency_url: Some("http://127.0.0.1:3080/api/status".into()),
+            unit: config.services.api.systemd_unit.clone(),
+            latency_url: Some(config.services.api.url.clone()),
             disabled_reason: None,
         },
         ServiceTarget {
@@ -909,6 +909,8 @@ mod tests {
         Config {
             data_dir: PathBuf::from("/tmp/geniepod-api-test"),
             core: CoreConfig::default(),
+            agent: Default::default(),
+            optional_ai_provider: Default::default(),
             governor: GovernorConfig::default(),
             health: HealthConfig::default(),
             services: ServicesConfig::default(),
@@ -923,6 +925,24 @@ mod tests {
         let mut config = test_config();
         config.core.port = 3001;
         assert_eq!(config.core_http_addr(), "127.0.0.1:3001");
+    }
+
+    #[test]
+    fn dashboard_core_target_uses_derived_health_url() {
+        let mut config = test_config();
+        config.core.port = 3001;
+        config.services.core.url = "http://127.0.0.1:3000/api/health".into();
+
+        let targets = dashboard_service_targets(&config);
+        let core_target = targets
+            .iter()
+            .find(|target| target.service == "core")
+            .expect("core target should always be present");
+
+        assert_eq!(
+            core_target.latency_url.as_deref(),
+            Some("http://127.0.0.1:3001/api/health"),
+        );
     }
 
     #[test]

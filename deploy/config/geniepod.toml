@@ -3,6 +3,24 @@
 
 data_dir = "/opt/geniepod/data"
 
+[agent]
+runtime_profile = "jetson"        # "jetson", "raspberry_pi", "portable_sbc", "laptop", or "mac".
+context_window_tokens = 4096      # Non-negotiable Jetson baseline before any adaptive larger context.
+ai_runtime_boundary = "external_runtime"       # genie-ai-runtime owns inference.
+voice_runtime_boundary = "transitional_adapter" # In-repo voice path is temporary; target is genie-voice-runtime.
+home_runtime_boundary = "transitional_adapter"  # HA provider today; target is genie-home-runtime.
+
+# Optional API-key provider path. Disabled by default so the local Jetson image
+# and binary stay focused on genie-ai-runtime. Enable only after the provider
+# passes the same 4096-token home-agent harness.
+[optional_ai_provider]
+enabled = false
+provider = "open_ai_compatible"   # "open_ai_compatible", "open_ai", "anthropic", "gemini", or "custom".
+base_url = ""
+api_key_env = "GENIEPOD_AI_PROVIDER_API_KEY"
+context_window_tokens = 4096
+allow_remote_base_url = false
+
 [core]
 port = 3000
 bind_host = "127.0.0.1"           # Safer default. Use "0.0.0.0" only behind a trusted gateway/firewall.
@@ -193,6 +211,10 @@ alert_webhook_url = ""            # Optional local notifier endpoint.
 # reply_as_voice = false           # Phase 2 of #42 — voice-out via sendVoice.
 # max_reply_chars = 800            # Replies longer than this fall back to text
 #                                  # so we don't blow the sendVoice 1 MB cap.
+# max_parallel_voice = 2           # Issue #77: how many voice pipelines may run
+#                                  # at once. Text-only updates are not gated.
+#                                  # Bump if the host has spare CPU and a
+#                                  # dedicated whisper-server.
 
 # Public web search tool. Default provider is DuckDuckGo Instant Answer, which needs no API key.
 # For a private/local path, run SearXNG and set provider = "searxng" with base_url.
@@ -232,6 +254,10 @@ backend = "genie_ai_runtime"      # Default on Jetson. OpenAI-compatible genie-a
                                   # Set backend = "llama_cpp" + systemd_unit = "genie-llm.service"
                                   # to roll back to the legacy llama.cpp server path.
                                   # Accepts hyphenated aliases too: "llama-cpp" / "genie-ai-runtime".
+
+[services.api]
+url = "http://127.0.0.1:3080/api/status"
+systemd_unit = "genie-api.service"
 
 # Uncomment to enable Home Assistant integration:
 # [services.homeassistant]

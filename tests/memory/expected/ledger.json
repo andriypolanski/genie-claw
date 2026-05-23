@@ -1,0 +1,218 @@
+{
+  "total": 21,
+  "passed": 21,
+  "pass_rate": 1.0,
+  "floor": 0.95,
+  "entries": [
+    {
+      "id": "household-jazz-basic",
+      "description": "Shared-room preference recalled by topic keyword",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Shared-room preference recalled by topic keyword"
+    },
+    {
+      "id": "household-identity-name",
+      "description": "Household identity recalled from a direct question",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Household identity recalled from a direct question"
+    },
+    {
+      "id": "household-pet-name",
+      "description": "Multi-token recall picks the relevant fact among several",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Multi-token recall picks the relevant fact among several"
+    },
+    {
+      "id": "household-tea-short-query",
+      "description": "Single-token short query still hits via FTS",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Single-token short query still hits via FTS"
+    },
+    {
+      "id": "household-multi-fact-disambiguation",
+      "description": "Recall scores the right fact even when several share a topic",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Recall scores the right fact even when several share a topic"
+    },
+    {
+      "id": "household-cautious-medical-diagnosis",
+      "description": "Medical-diagnosis content is cautious -> confirm -> filtered",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Medical-diagnosis content is cautious -> confirm -> filtered"
+    },
+    {
+      "id": "household-cautious-therapy",
+      "description": "Therapy-session content is cautious -> confirm -> filtered",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Therapy-session content is cautious -> confirm -> filtered"
+    },
+    {
+      "id": "person-shared-room-filtered",
+      "description": "Person memory is dropped in unidentified shared-room voice",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Person memory is dropped in unidentified shared-room voice"
+    },
+    {
+      "id": "person-medium-identity-hits",
+      "description": "Person memory speaks once identity_confidence reaches medium",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Person memory speaks once identity_confidence reaches medium"
+    },
+    {
+      "id": "person-explicit-name-hits",
+      "description": "Explicit naming unlocks person memory even at low identity confidence",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Explicit naming unlocks person memory even at low identity confidence"
+    },
+    {
+      "id": "private-shared-room-denied",
+      "description": "Private content is denied in shared-room voice",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Private content is denied in shared-room voice"
+    },
+    {
+      "id": "private-named-still-denied-in-shared-voice",
+      "description": "Even explicit private intent stays denied while shared_space_voice is true",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Even explicit private intent stays denied while shared_space_voice is true"
+    },
+    {
+      "id": "private-app-only-still-not-spoken",
+      "description": "Private + private intent off-shared-voice resolves to AppOnly, still not in recall context",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Private + private intent off-shared-voice resolves to AppOnly, still not in recall context"
+    },
+    {
+      "id": "restricted-password-deny",
+      "description": "Password content is restricted -> deny -> filtered",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Password content is restricted -> deny -> filtered"
+    },
+    {
+      "id": "restricted-credit-card-deny",
+      "description": "Card number content is restricted -> deny -> filtered",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Card number content is restricted -> deny -> filtered"
+    },
+    {
+      "id": "restricted-api-key-deny",
+      "description": "API key content is restricted -> deny -> filtered",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "API key content is restricted -> deny -> filtered"
+    },
+    {
+      "id": "miss-empty-database",
+      "description": "Empty Memory + non-empty query is a no_match miss",
+      "expected_outcome": "miss",
+      "actual_outcome": "miss",
+      "raw_hits": 0,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Empty Memory + non-empty query is a no_match miss"
+    },
+    {
+      "id": "miss-unrelated-query",
+      "description": "Seeded memory, unrelated query is a no_match miss",
+      "expected_outcome": "miss",
+      "actual_outcome": "miss",
+      "raw_hits": 0,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Seeded memory, unrelated query is a no_match miss"
+    },
+    {
+      "id": "restart-household-survives",
+      "description": "Household fact survives drop + reopen of Memory",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Household fact survives drop + reopen of Memory"
+    },
+    {
+      "id": "restart-identity-survives",
+      "description": "Identity fact survives drop + reopen of Memory",
+      "expected_outcome": "hit",
+      "actual_outcome": "hit",
+      "raw_hits": 1,
+      "recalled_hits": 1,
+      "pass": true,
+      "note": "Identity fact survives drop + reopen of Memory"
+    },
+    {
+      "id": "restart-policy-survives",
+      "description": "Inferred policy survives restart: restricted content is still filtered after reopen",
+      "expected_outcome": "filtered",
+      "actual_outcome": "filtered",
+      "raw_hits": 1,
+      "recalled_hits": 0,
+      "pass": true,
+      "note": "Inferred policy survives restart: restricted content is still filtered after reopen"
+    }
+  ]
+}

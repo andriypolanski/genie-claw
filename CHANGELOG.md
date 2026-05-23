@@ -14,6 +14,25 @@
   identical SHA, plus asserts that a prompt-assembly or hydration change
   shifts the digest — so silent prompt drift between runs becomes a visible
   hash mismatch instead of an undetected behavior change.
+- **Crash fix: non-ASCII backend error bodies** (#147): `truncate_body`
+  in `llm/openai_compat.rs` sliced the response body at a fixed 240-byte
+  offset (`&trimmed[..240]`). When that offset landed inside a multi-byte
+  UTF-8 character — common for localized HTML error pages or malformed
+  JSON — the slice panicked, and because release builds use
+  `panic = "abort"` it took down the whole `genie-core` daemon (health
+  checks and voice service) rather than failing the single request. The
+  truncation now walks back to a char boundary via the existing
+  `truncate_utf8` helper, so a malformed response surfaces as an ordinary
+  error string.
+- **Governor LLM model swap reports failures** (#148): `ServiceCtl::swap_llm_model`
+  now checks `status.success()` on both `systemctl daemon-reload` and
+  `systemctl restart <unit>`, logs the captured `stderr`, and `bail!`s on a
+  non-zero exit — matching `start` / `docker_start` / `enable_zram`. Previously
+  `.output().await?` only surfaced spawn failures, so a denied restart (polkit
+  policy, masked unit, rejected override) silently no-op'd while reporting
+  success, leaving the heavier model resident during a memory-relief transition
+  and risking OOM on the 8 GB Orin. The three `governor.rs` call sites now log
+  the swap result (`tracing::error!`) instead of discarding it with `let _ =`.
 - **Real streaming TTS** (#26): the voice loop now detects sentence
   boundaries inside the LLM streaming callback and forwards completed
   sentences to a concurrent TTS task immediately, instead of waiting

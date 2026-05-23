@@ -29,9 +29,9 @@ async fn main() -> Result<()> {
         .init();
 
     let config = Config::load()?;
-    let bind_addr = "127.0.0.1:3080";
+    let bind_addr = config.api_http_addr()?;
 
-    tracing::info!(addr = bind_addr, "GeniePod API server starting");
+    tracing::info!(addr = %bind_addr, "GeniePod API server starting");
 
-    http::serve(bind_addr, config).await
+    http::serve(&bind_addr, config).await
 }

@@ -106,16 +106,29 @@ impl ServiceCtl {
         )
         .await?;
 
-        // Reload systemd and restart the LLM service.
-        Command::new("systemctl")
+        // Reload systemd and restart the LLM service. Both commands can fail
+        // silently (polkit denial, masked unit, rejected override) — a swallowed
+        // failure here leaves the heavier model resident and risks OOM, so we
+        // check the exit status and bail like the other state-changing methods.
+        let output = Command::new("systemctl")
             .args(["daemon-reload"])
             .output()
             .await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(unit = %unit, %stderr, "systemctl daemon-reload failed");
+            anyhow::bail!("systemctl daemon-reload failed: {}", stderr);
+        }
 
-        Command::new("systemctl")
+        let output = Command::new("systemctl")
             .args(["restart", &unit])
             .output()
             .await?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::warn!(unit = %unit, %stderr, "failed to restart LLM service");
+            anyhow::bail!("systemctl restart {} failed: {}", unit, stderr);
+        }
 
         Ok(())
     }

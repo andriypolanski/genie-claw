@@ -204,7 +204,9 @@ impl Governor {
                 if let Some(model) = target.llm_model() {
                     let path = format!("/opt/geniepod/models/{}", model);
                     let unit = self.llm_service_unit();
-                    let _ = ServiceCtl::swap_llm_model(&unit, &path).await;
+                    if let Err(e) = ServiceCtl::swap_llm_model(&unit, &path).await {
+                        tracing::error!(error = %e, unit = %unit, model = %path, "LLM model swap failed");
+                    }
                 }
                 let _ = tokio::fs::remove_file("/run/geniepod/media_mode").await;
             }
@@ -212,14 +214,18 @@ impl Governor {
                 if let Some(model) = Mode::NightB.llm_model() {
                     let path = format!("/opt/geniepod/models/{}", model);
                     let unit = self.llm_service_unit();
-                    let _ = ServiceCtl::swap_llm_model(&unit, &path).await;
+                    if let Err(e) = ServiceCtl::swap_llm_model(&unit, &path).await {
+                        tracing::error!(error = %e, unit = %unit, model = %path, "LLM model swap failed");
+                    }
                 }
             }
             (Mode::NightB, Mode::Day) => {
                 if let Some(model) = Mode::Day.llm_model() {
                     let path = format!("/opt/geniepod/models/{}", model);
                     let unit = self.llm_service_unit();
-                    let _ = ServiceCtl::swap_llm_model(&unit, &path).await;
+                    if let Err(e) = ServiceCtl::swap_llm_model(&unit, &path).await {
+                        tracing::error!(error = %e, unit = %unit, model = %path, "LLM model swap failed");
+                    }
                 }
             }
             _ => {}
@@ -326,6 +332,8 @@ mod tests {
         Config {
             data_dir: PathBuf::from("/tmp/geniepod-test"),
             core: CoreConfig::default(),
+            agent: AgentConfig::default(),
+            optional_ai_provider: OptionalAiProviderConfig::default(),
             governor: GovernorConfig {
                 poll_interval_ms: 1000,
                 night_start_hour: 23,

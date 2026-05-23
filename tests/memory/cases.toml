@@ -1,0 +1,282 @@
+# Memory recall test set — tracks issue #111 (M1 exit criterion).
+#
+# Each [[case]] table is one scenario. The runner is
+# crates/genie-core/tests/memory_recall.rs; the README in this directory
+# explains the schema.
+#
+# Convention: case ids are kebab-case and group by the policy axis under
+# test (household / cautious / person / private / restricted / no-match /
+# restart / query-shape).
+
+# ---------------------------------------------------------------------------
+# Shared-room household, normal sensitivity, spoken_policy = allow.
+# This is the default "memory just works" path.
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "household-jazz-basic"
+description = "Shared-room preference recalled by topic keyword"
+restart = false
+seed = [
+  { kind = "preference", content = "User likes jazz music" },
+]
+query = "music"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "jazz" }
+
+[[case]]
+id = "household-identity-name"
+description = "Household identity recalled from a direct question"
+restart = false
+seed = [
+  { kind = "identity", content = "Household member name is Jared" },
+]
+query = "what is my name"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "Jared" }
+
+[[case]]
+id = "household-pet-name"
+description = "Multi-token recall picks the relevant fact among several"
+restart = false
+seed = [
+  { kind = "fact", content = "The dog is named Mochi" },
+  { kind = "fact", content = "The cat is named Pip" },
+  { kind = "preference", content = "User drinks coffee black" },
+]
+query = "dog name"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "Mochi" }
+
+[[case]]
+id = "household-tea-short-query"
+description = "Single-token short query still hits via FTS"
+restart = false
+seed = [
+  { kind = "preference", content = "User drinks tea every morning" },
+]
+query = "tea"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "tea" }
+
+[[case]]
+id = "household-multi-fact-disambiguation"
+description = "Recall scores the right fact even when several share a topic"
+restart = false
+seed = [
+  { kind = "preference", content = "User likes spicy Thai food" },
+  { kind = "preference", content = "User dislikes raw onions" },
+  { kind = "preference", content = "User is vegetarian on weekdays" },
+]
+query = "vegetarian"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "vegetarian" }
+
+# ---------------------------------------------------------------------------
+# Household, cautious sensitivity. Content is shared-room but the inferred
+# spoken_policy = confirm, so recall_with_context drops the entry — we want
+# this to surface as a logged miss, not a silent empty context.
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "household-cautious-medical-diagnosis"
+description = "Medical-diagnosis content is cautious -> confirm -> filtered"
+restart = false
+seed = [
+  { kind = "fact", content = "User has a recent medical diagnosis of mild asthma" },
+]
+query = "diagnosis"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+[[case]]
+id = "household-cautious-therapy"
+description = "Therapy-session content is cautious -> confirm -> filtered"
+restart = false
+seed = [
+  { kind = "fact", content = "User mentioned a therapy session next Tuesday" },
+]
+query = "therapy"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+# ---------------------------------------------------------------------------
+# Person scope. kind="person_*" infers MemoryScope::Person, which needs
+# either explicit_named_person or identity_confidence >= Medium to disclose.
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "person-shared-room-filtered"
+description = "Person memory is dropped in unidentified shared-room voice"
+restart = false
+seed = [
+  { kind = "person_preference", content = "Maya likes oat milk" },
+]
+query = "oat milk"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+[[case]]
+id = "person-medium-identity-hits"
+description = "Person memory speaks once identity_confidence reaches medium"
+restart = false
+seed = [
+  { kind = "person_preference", content = "Maya likes oat milk" },
+]
+query = "oat milk"
+context = { identity_confidence = "medium", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "Maya" }
+
+[[case]]
+id = "person-explicit-name-hits"
+description = "Explicit naming unlocks person memory even at low identity confidence"
+restart = false
+seed = [
+  { kind = "person_preference", content = "Maya likes oat milk" },
+]
+query = "what does Maya drink"
+context = { identity_confidence = "low", explicit_named_person = true, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "Maya" }
+
+# ---------------------------------------------------------------------------
+# Private scope. Content phrasing triggers has_private_intent() ->
+# MemoryScope::Private. Private + shared_space_voice = deny; private +
+# explicit_private_intent + not-shared = AppOnly (still allowed=false).
+# Either way, recall_with_context must filter.
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "private-shared-room-denied"
+description = "Private content is denied in shared-room voice"
+restart = false
+seed = [
+  { kind = "fact", content = "remember this privately: user is interviewing at Acme" },
+]
+query = "interview"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+[[case]]
+id = "private-named-still-denied-in-shared-voice"
+description = "Even explicit private intent stays denied while shared_space_voice is true"
+restart = false
+seed = [
+  { kind = "fact", content = "remember this privately: user is interviewing at Acme" },
+]
+query = "interview"
+context = { identity_confidence = "high", explicit_named_person = false, explicit_private_intent = true, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+[[case]]
+id = "private-app-only-still-not-spoken"
+description = "Private + private intent off-shared-voice resolves to AppOnly, still not in recall context"
+restart = false
+seed = [
+  { kind = "fact", content = "private note: user is interviewing at Acme" },
+]
+query = "interview"
+context = { identity_confidence = "high", explicit_named_person = false, explicit_private_intent = true, shared_space_voice = false }
+expect = { outcome = "filtered" }
+
+# ---------------------------------------------------------------------------
+# Restricted content. infer_metadata flags passwords / cards / keys as
+# Restricted -> spoken_policy = Deny. Even if the user explicitly asks for
+# them, recall must not surface them.
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "restricted-password-deny"
+description = "Password content is restricted -> deny -> filtered"
+restart = false
+seed = [
+  { kind = "fact", content = "user's password is swordfish" },
+]
+query = "password"
+context = { identity_confidence = "high", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+[[case]]
+id = "restricted-credit-card-deny"
+description = "Card number content is restricted -> deny -> filtered"
+restart = false
+seed = [
+  { kind = "fact", content = "user's credit card is 4111 1111 1111 1111" },
+]
+query = "credit card"
+context = { identity_confidence = "high", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+[[case]]
+id = "restricted-api-key-deny"
+description = "API key content is restricted -> deny -> filtered"
+restart = false
+seed = [
+  { kind = "fact", content = "the deploy api key is abc123xyz" },
+]
+query = "deploy key"
+context = { identity_confidence = "high", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }
+
+# ---------------------------------------------------------------------------
+# True misses. The runner asserts that the miss log fires with
+# cause="no_match" for these (verified inside the runner via tracing
+# capture, not in the TOML).
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "miss-empty-database"
+description = "Empty Memory + non-empty query is a no_match miss"
+restart = false
+seed = []
+query = "what did I tell you about pickles"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "miss" }
+
+[[case]]
+id = "miss-unrelated-query"
+description = "Seeded memory, unrelated query is a no_match miss"
+restart = false
+seed = [
+  { kind = "preference", content = "User likes jazz music" },
+]
+query = "submarine maintenance schedule"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "miss" }
+
+# ---------------------------------------------------------------------------
+# Persistence across "stack restart" — drop the Memory handle, reopen the
+# same SQLite file, then query. This is the M1 "next session" semantics.
+# ---------------------------------------------------------------------------
+
+[[case]]
+id = "restart-household-survives"
+description = "Household fact survives drop + reopen of Memory"
+restart = true
+seed = [
+  { kind = "preference", content = "User likes jazz music" },
+]
+query = "music"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "jazz" }
+
+[[case]]
+id = "restart-identity-survives"
+description = "Identity fact survives drop + reopen of Memory"
+restart = true
+seed = [
+  { kind = "identity", content = "Household member name is Jared" },
+]
+query = "name"
+context = { identity_confidence = "unknown", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "hit", contains = "Jared" }
+
+[[case]]
+id = "restart-policy-survives"
+description = "Inferred policy survives restart: restricted content is still filtered after reopen"
+restart = true
+seed = [
+  { kind = "fact", content = "user's password is swordfish" },
+]
+query = "password"
+context = { identity_confidence = "high", explicit_named_person = false, explicit_private_intent = false, shared_space_voice = true }
+expect = { outcome = "filtered" }

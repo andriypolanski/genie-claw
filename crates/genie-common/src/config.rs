@@ -15,6 +15,12 @@ pub struct Config {
     pub core: CoreConfig,
 
     #[serde(default)]
+    pub agent: AgentConfig,
+
+    #[serde(default)]
+    pub optional_ai_provider: OptionalAiProviderConfig,
+
+    #[serde(default)]
     pub governor: GovernorConfig,
 
     #[serde(default)]
@@ -222,6 +228,157 @@ impl Default for CoreConfig {
     }
 }
 
+#[derive(Debug, Deserialize, Clone)]
+pub struct AgentConfig {
+    /// Primary deployment profile. Jetson stays the flagship default, but the
+    /// agent contract must also run on portable dev hosts and SBCs.
+    #[serde(default)]
+    pub runtime_profile: AgentRuntimeProfile,
+
+    /// Non-negotiable context budget for the Jetson baseline. Stronger models
+    /// may adapt upward later, but production paths must pass this budget first.
+    #[serde(default = "defaults::agent_context_window_tokens")]
+    pub context_window_tokens: u32,
+
+    /// AI runtime boundary owned below GenieClaw.
+    #[serde(default = "defaults::agent_ai_boundary")]
+    pub ai_runtime_boundary: RuntimeBoundaryMode,
+
+    /// Voice runtime boundary. The in-repo path is transitional only.
+    #[serde(default = "defaults::agent_voice_boundary")]
+    pub voice_runtime_boundary: RuntimeBoundaryMode,
+
+    /// Home runtime boundary. Home Assistant is a transitional provider today.
+    #[serde(default = "defaults::agent_home_boundary")]
+    pub home_runtime_boundary: RuntimeBoundaryMode,
+}
+
+impl Default for AgentConfig {
+    fn default() -> Self {
+        Self {
+            runtime_profile: AgentRuntimeProfile::Jetson,
+            context_window_tokens: defaults::agent_context_window_tokens(),
+            ai_runtime_boundary: defaults::agent_ai_boundary(),
+            voice_runtime_boundary: defaults::agent_voice_boundary(),
+            home_runtime_boundary: defaults::agent_home_boundary(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentRuntimeProfile {
+    #[default]
+    Jetson,
+    RaspberryPi,
+    PortableSbc,
+    Laptop,
+    Mac,
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeBoundaryMode {
+    /// Stable external runtime contract. This is the target shape.
+    #[default]
+    ExternalRuntime,
+    /// In-repo adapter kept only until the external runtime takes ownership.
+    TransitionalAdapter,
+    /// Disabled on this profile.
+    Disabled,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct OptionalAiProviderConfig {
+    /// API-key provider support is opt-in and must not change the default
+    /// Jetson local binary path.
+    #[serde(default)]
+    pub enabled: bool,
+
+    #[serde(default)]
+    pub provider: OptionalAiProviderKind,
+
+    /// Base URL or endpoint identifier for provider clients. Empty while
+    /// disabled. Remote endpoints require allow_remote_base_url = true.
+    #[serde(default)]
+    pub base_url: String,
+
+    /// Environment variable that contains the API key. The key value itself is
+    /// never stored in config and is not included in support summaries.
+    #[serde(default = "defaults::optional_ai_provider_api_key_env")]
+    pub api_key_env: String,
+
+    /// Provider path must pass the same limited-context harness before it is
+    /// promoted. Keep this at or below [agent].context_window_tokens.
+    #[serde(default = "defaults::agent_context_window_tokens")]
+    pub context_window_tokens: u32,
+
+    /// Explicit opt-in for non-local endpoints.
+    #[serde(default)]
+    pub allow_remote_base_url: bool,
+}
+
+impl OptionalAiProviderConfig {
+    pub fn limited_context_compatible(&self, agent: &AgentConfig) -> bool {
+        !self.enabled || self.context_window_tokens <= agent.context_window_tokens
+    }
+
+    pub fn production_candidate(&self, agent: &AgentConfig) -> bool {
+        self.enabled
+            && self.limited_context_compatible(agent)
+            && !self.api_key_env.trim().is_empty()
+            && (!is_remote_url(&self.base_url) || self.allow_remote_base_url)
+    }
+}
+
+impl Default for OptionalAiProviderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            provider: OptionalAiProviderKind::OpenAiCompatible,
+            base_url: String::new(),
+            api_key_env: defaults::optional_ai_provider_api_key_env(),
+            context_window_tokens: defaults::agent_context_window_tokens(),
+            allow_remote_base_url: false,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OptionalAiProviderKind {
+    /// Generic OpenAI-compatible API surface. Concrete providers can map into
+    /// this without adding a heavyweight SDK dependency.
+    #[default]
+    #[serde(alias = "openai_compatible")]
+    OpenAiCompatible,
+    #[serde(alias = "openai")]
+    OpenAi,
+    Anthropic,
+    Gemini,
+    Custom,
+}
+
+fn is_remote_url(url: &str) -> bool {
+    let url = url.trim();
+    if url.is_empty() {
+        return false;
+    }
+    let stripped = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))
+        .unwrap_or(url);
+    let authority = stripped.split('/').next().unwrap_or(stripped);
+    let host = if let Some(rest) = authority.strip_prefix('[') {
+        rest.find(']')
+            .map(|idx| &authority[..=idx + 1])
+            .unwrap_or(authority)
+    } else {
+        authority.split(':').next().unwrap_or(authority)
+    };
+    !matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]")
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct SkillPolicyConfig {
     /// Reject skills without a valid sidecar manifest.
@@ -414,6 +571,13 @@ pub struct HealthConfig {
 pub struct ServicesConfig {
     pub core: ServiceEndpoint,
     pub llm: ServiceEndpoint,
+
+    /// genie-api HTTP service. Falls back to the documented default
+    /// (`http://127.0.0.1:3080/api/status`) when absent so existing
+    /// deployments keep working after this field was added.
+    #[serde(default = "defaults::api_service")]
+    pub api: ServiceEndpoint,
+
     pub homeassistant: Option<ServiceEndpoint>,
 
     #[serde(default)]
@@ -490,6 +654,14 @@ pub struct TelegramVoiceConfig {
     /// Tuned for the 60–90 s of OGG/Opus that comfortably fits under 1 MB.
     #[serde(default = "defaults::telegram_voice_max_reply_chars")]
     pub max_reply_chars: usize,
+
+    /// Bound on concurrent voice pipelines (download → ffmpeg → whisper-server
+    /// → /api/chat) the adapter will run at once. Issue #77: the poll loop
+    /// now spawns each update, but unbounded fan-out under burst could
+    /// overload ffmpeg / whisper-server. Text-only updates are not gated by
+    /// this knob.
+    #[serde(default = "defaults::telegram_voice_max_parallel_voice")]
+    pub max_parallel_voice: usize,
 }
 
 impl Default for TelegramVoiceConfig {
@@ -501,6 +673,7 @@ impl Default for TelegramVoiceConfig {
             ffmpeg_path: defaults::telegram_voice_ffmpeg_path(),
             reply_as_voice: false,
             max_reply_chars: defaults::telegram_voice_max_reply_chars(),
+            max_parallel_voice: defaults::telegram_voice_max_parallel_voice(),
         }
     }
 }
@@ -616,6 +789,136 @@ pub struct ServiceEndpoint {
     pub backend: LlmBackendKind,
 }
 
+/// Result of resolving a configured service URL for the simple TCP probe
+/// path used by `genie-ctl status` / `diag` / `support-bundle`.
+///
+/// `Http` targets are usable by a plaintext TCP client. Anything else
+/// (today: `https://`, plus unknown schemes that look like a scheme but
+/// aren't `http`) is returned as [`ServiceProbeTarget::UnsupportedScheme`]
+/// so callers can label the row instead of mis-reporting a healthy
+/// service as DOWN by sending plaintext to a TLS port.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServiceProbeTarget {
+    /// Plain-HTTP probe target.
+    Http {
+        /// `host:port`, with IPv6 hosts kept bracketed (e.g. `[::1]:80`)
+        /// so the string round-trips through `to_socket_addrs`.
+        addr: String,
+        /// Request path, always starting with `/`.
+        path: String,
+    },
+    /// Scheme the plain-TCP probe cannot service. `genie-ctl` should skip
+    /// the probe and surface "scheme not supported" rather than DOWN.
+    /// Wiring in a TLS client is tracked separately; see issue #126
+    /// discussion.
+    UnsupportedScheme {
+        /// The scheme as found in the URL (lowercased), e.g. `"https"`.
+        scheme: String,
+    },
+}
+
+/// Parse a configured service URL into a probe target for `genie-ctl`'s
+/// plain-TCP HTTP client.
+///
+/// Behavior:
+/// - Bare URLs without a scheme are treated as `http://…`.
+/// - `http://` URLs produce [`ServiceProbeTarget::Http`].
+/// - `https://` (and any other recognized scheme that isn't `http`) produces
+///   [`ServiceProbeTarget::UnsupportedScheme`] — the probe path cannot speak
+///   TLS, so we refuse rather than send plaintext to port 443.
+/// - Missing port defaults to 80 for `http`.
+/// - Missing path defaults to `/`.
+/// - IPv6 hosts must be bracketed (`[::1]`, `[::1]:8123`); brackets are
+///   preserved in the returned `addr` so the string parses with
+///   `std::net::ToSocketAddrs`.
+pub fn parse_service_probe_target(url: &str) -> ServiceProbeTarget {
+    // Scheme split. A leading `scheme://` is recognized when the scheme is
+    // ASCII letters followed by `://`. Anything else falls through as a
+    // bare `http` authority — keeps existing config files that wrote
+    // `127.0.0.1:3080/api/status` working.
+    let (scheme, rest) = match split_scheme(url) {
+        Some((scheme, rest)) => (scheme, rest),
+        None => ("http", url),
+    };
+
+    if scheme != "http" {
+        return ServiceProbeTarget::UnsupportedScheme {
+            scheme: scheme.to_string(),
+        };
+    }
+
+    let (authority, path) = split_authority_and_path(rest);
+    let addr = ensure_port(authority, 80);
+    let path = if path.is_empty() {
+        "/".to_string()
+    } else {
+        path.to_string()
+    };
+
+    ServiceProbeTarget::Http { addr, path }
+}
+
+/// Split a URL into `(lowercased_scheme, rest_after_://)` when it starts
+/// with a `scheme://` prefix; otherwise `None`.
+fn split_scheme(url: &str) -> Option<(&'static str, &str)> {
+    // Only recognize the two schemes this codebase actually uses; anything
+    // else falls through and is reported as unsupported via the caller's
+    // exhaustive match. Keeping this small avoids pretending we understand
+    // arbitrary URLs.
+    for scheme in ["http", "https"] {
+        let prefix = match scheme {
+            "http" => "http://",
+            "https" => "https://",
+            _ => unreachable!(),
+        };
+        if let Some(rest) = url.strip_prefix(prefix) {
+            return Some((scheme, rest));
+        }
+    }
+    None
+}
+
+/// Split `authority[path]` into (authority, path). IPv6 brackets are
+/// respected: the first `/` *after* a closing `]` is the path delimiter,
+/// not any earlier slash that might appear inside `[…]` (it can't today,
+/// but the rule is the simplest correct one).
+fn split_authority_and_path(rest: &str) -> (&str, &str) {
+    // For `[…]…` find the closing bracket first and split on the first
+    // `/` that follows it. Otherwise split on the first `/`.
+    let scan_from = if rest.starts_with('[') {
+        rest.find(']').map(|i| i + 1).unwrap_or(rest.len())
+    } else {
+        0
+    };
+
+    match rest[scan_from..].find('/') {
+        Some(idx) => rest.split_at(scan_from + idx),
+        None => (rest, "/"),
+    }
+}
+
+/// Append `:default_port` to `authority` unless it already carries an
+/// explicit port. Bracket-aware so a bare `[::1]` correctly gets the
+/// default added (a naive `contains(':')` check would treat the colons
+/// inside the brackets as a port separator).
+fn ensure_port(authority: &str, default_port: u16) -> String {
+    let has_explicit_port = if let Some(rest) = authority.strip_prefix('[') {
+        // Bracketed IPv6. A port, if present, follows the closing `]`.
+        rest.find(']')
+            .map(|i| rest[i + 1..].starts_with(':'))
+            .unwrap_or(false)
+    } else {
+        // Hostname or IPv4 — a single colon means `host:port`.
+        authority.contains(':')
+    };
+
+    if has_explicit_port {
+        authority.to_string()
+    } else {
+        format!("{authority}:{default_port}")
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LlmBackendKind {
@@ -657,6 +960,30 @@ impl Config {
         format!("{host}:{}", self.core.port)
     }
 
+    /// Health-probe URL for genie-core, derived from `[core].bind_host` and
+    /// `[core].port` instead of `[services.core].url`.
+    ///
+    /// Local probes should follow where core actually listens. Reading
+    /// `[services.core].url` can drift when an operator changes `[core].port`
+    /// but leaves the service URL at its default, producing false DOWN signals.
+    pub fn core_health_url(&self) -> String {
+        format!("http://{}/api/health", self.core_http_addr())
+    }
+
+    /// TCP `host:port` for `genie-api` to bind, derived from `[services.api].url`.
+    ///
+    /// Keeps the listen socket aligned with health probes and `genie-ctl` that
+    /// already read the same configured URL (issue #140).
+    pub fn api_http_addr(&self) -> anyhow::Result<String> {
+        match parse_service_probe_target(&self.services.api.url) {
+            ServiceProbeTarget::Http { addr, .. } => Ok(addr),
+            ServiceProbeTarget::UnsupportedScheme { scheme } => anyhow::bail!(
+                "genie-api cannot bind from [services.api].url: unsupported scheme \
+                 \"{scheme}\" (use http://)"
+            ),
+        }
+    }
+
     /// Resolve the configured Home Assistant endpoint, if this deployment uses one.
     pub fn homeassistant_service(&self) -> Option<&ServiceEndpoint> {
         self.services.homeassistant.as_ref()
@@ -677,7 +1004,7 @@ impl Config {
     /// Whether the current deployment should manage a given service alias.
     pub fn manages_service_alias(&self, alias: &str) -> bool {
         match alias {
-            "core" | "genie-core" | "llm" | "genie-llm" => true,
+            "core" | "genie-core" | "llm" | "genie-llm" | "api" | "genie-api" => true,
             "homeassistant" => self.services.homeassistant.is_some(),
             "nextcloud" => self.services.nextcloud.is_some(),
             "jellyfin" => self.services.jellyfin.is_some(),
@@ -692,6 +1019,7 @@ impl Config {
         match alias {
             "core" | "genie-core" => Some(self.services.core.systemd_unit.clone()),
             "llm" | "genie-llm" => Some(self.services.llm.systemd_unit.clone()),
+            "api" | "genie-api" => Some(self.services.api.systemd_unit.clone()),
             "homeassistant" => self
                 .services
                 .homeassistant
@@ -768,6 +1096,22 @@ impl Config {
         if self.telegram.enabled && !self.telegram.bot_token.trim().is_empty() {
             risk_flags.push("telegram_token_in_config_file");
         }
+        if self.optional_ai_provider.enabled {
+            risk_flags.push("optional_ai_provider_enabled");
+        }
+        if self.optional_ai_provider.enabled
+            && !self
+                .optional_ai_provider
+                .limited_context_compatible(&self.agent)
+        {
+            risk_flags.push("optional_ai_provider_context_exceeds_agent_budget");
+        }
+        if self.optional_ai_provider.enabled
+            && is_remote_url(&self.optional_ai_provider.base_url)
+            && !self.optional_ai_provider.allow_remote_base_url
+        {
+            risk_flags.push("optional_ai_provider_remote_url_blocked");
+        }
         if !self.core.skill_policy.require_manifest {
             risk_flags.push("skill_manifest_not_required");
         }
@@ -779,6 +1123,14 @@ impl Config {
             "trust_model": "single_household_operator_boundary",
             "raw_config_exposed": false,
             "raw_config_policy": "local_operator_file_only",
+            "agent": {
+                "runtime_profile": format!("{:?}", self.agent.runtime_profile),
+                "context_window_tokens": self.agent.context_window_tokens,
+                "ai_runtime_boundary": format!("{:?}", self.agent.ai_runtime_boundary),
+                "voice_runtime_boundary": format!("{:?}", self.agent.voice_runtime_boundary),
+                "home_runtime_boundary": format!("{:?}", self.agent.home_runtime_boundary),
+                "agent_layer_only": true
+            },
             "shared_memory": {
                 "mode": "household_shared_by_default",
                 "dashboard_manager_enabled": true,
@@ -797,7 +1149,18 @@ impl Config {
                 "telegram_enabled": self.telegram.enabled,
                 "telegram_allowlist_enabled": self.telegram.enabled && !self.telegram.allow_all_chats && !self.telegram.allowed_chat_ids.is_empty(),
                 "homeassistant_bridge_configured": self.services.homeassistant.is_some(),
-                "connectivity_coprocessor_enabled": self.connectivity_enabled()
+                "connectivity_coprocessor_enabled": self.connectivity_enabled(),
+                "optional_ai_provider_enabled": self.optional_ai_provider.enabled
+            },
+            "optional_ai_provider": {
+                "enabled": self.optional_ai_provider.enabled,
+                "provider": format!("{:?}", self.optional_ai_provider.provider),
+                "context_window_tokens": self.optional_ai_provider.context_window_tokens,
+                "limited_context_compatible": self.optional_ai_provider.limited_context_compatible(&self.agent),
+                "allow_remote_base_url": self.optional_ai_provider.allow_remote_base_url,
+                "api_key_env_configured": !self.optional_ai_provider.api_key_env.trim().is_empty(),
+                "base_url_configured": !self.optional_ai_provider.base_url.trim().is_empty(),
+                "api_key_value_exposed": false
             },
             "policy": {
                 "tool_policy_enabled": self.core.tool_policy.enabled,
@@ -864,6 +1227,7 @@ impl Default for ServicesConfig {
                 systemd_unit: "genie-ai-runtime.service".into(),
                 backend: LlmBackendKind::GenieAiRuntime,
             },
+            api: defaults::api_service(),
             homeassistant: None,
             nextcloud: None,
             jellyfin: None,
@@ -933,6 +1297,8 @@ mod tests {
         Config {
             data_dir: defaults::data_dir(),
             core: CoreConfig::default(),
+            agent: AgentConfig::default(),
+            optional_ai_provider: OptionalAiProviderConfig::default(),
             governor: GovernorConfig::default(),
             health: HealthConfig::default(),
             services: ServicesConfig::default(),
@@ -947,6 +1313,237 @@ mod tests {
         let config = test_config();
         assert!(config.homeassistant_service().is_none());
         assert!(!config.manages_service_alias("homeassistant"));
+    }
+
+    #[test]
+    fn agent_profile_defaults_to_jetson_limited_context() {
+        let config = test_config();
+        assert_eq!(config.agent.runtime_profile, AgentRuntimeProfile::Jetson);
+        assert_eq!(config.agent.context_window_tokens, 4096);
+        assert_eq!(
+            config.agent.ai_runtime_boundary,
+            RuntimeBoundaryMode::ExternalRuntime
+        );
+        assert_eq!(
+            config.agent.voice_runtime_boundary,
+            RuntimeBoundaryMode::TransitionalAdapter
+        );
+        assert_eq!(
+            config.agent.home_runtime_boundary,
+            RuntimeBoundaryMode::TransitionalAdapter
+        );
+    }
+
+    #[test]
+    fn portable_agent_profile_parses() {
+        let config: AgentConfig = toml::from_str(
+            r#"
+runtime_profile = "portable_sbc"
+context_window_tokens = 4096
+ai_runtime_boundary = "external_runtime"
+voice_runtime_boundary = "disabled"
+home_runtime_boundary = "external_runtime"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.runtime_profile, AgentRuntimeProfile::PortableSbc);
+        assert_eq!(config.context_window_tokens, 4096);
+        assert_eq!(config.voice_runtime_boundary, RuntimeBoundaryMode::Disabled);
+    }
+
+    #[test]
+    fn optional_ai_provider_is_disabled_and_limited_context_by_default() {
+        let config = test_config();
+        assert!(!config.optional_ai_provider.enabled);
+        assert_eq!(
+            config.optional_ai_provider.provider,
+            OptionalAiProviderKind::OpenAiCompatible
+        );
+        assert!(
+            config
+                .optional_ai_provider
+                .limited_context_compatible(&config.agent)
+        );
+        assert!(
+            !config
+                .optional_ai_provider
+                .production_candidate(&config.agent)
+        );
+    }
+
+    #[test]
+    fn optional_ai_provider_must_fit_limited_context() {
+        let agent = AgentConfig::default();
+        let provider: OptionalAiProviderConfig = toml::from_str(
+            r#"
+enabled = true
+provider = "open_ai"
+base_url = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
+context_window_tokens = 8192
+allow_remote_base_url = true
+"#,
+        )
+        .unwrap();
+
+        assert!(!provider.limited_context_compatible(&agent));
+        assert!(!provider.production_candidate(&agent));
+    }
+
+    #[test]
+    fn optional_ai_provider_remote_requires_explicit_allow() {
+        let agent = AgentConfig::default();
+        let provider: OptionalAiProviderConfig = toml::from_str(
+            r#"
+enabled = true
+provider = "custom"
+base_url = "https://provider.example/v1"
+api_key_env = "GENIE_PROVIDER_KEY"
+context_window_tokens = 4096
+allow_remote_base_url = false
+"#,
+        )
+        .unwrap();
+
+        assert!(provider.limited_context_compatible(&agent));
+        assert!(!provider.production_candidate(&agent));
+    }
+
+    #[test]
+    fn api_service_defaults_to_documented_endpoint() {
+        let config = test_config();
+        assert_eq!(config.services.api.url, "http://127.0.0.1:3080/api/status");
+        assert_eq!(config.services.api.systemd_unit, "genie-api.service");
+        assert!(config.manages_service_alias("api"));
+        assert!(config.manages_service_alias("genie-api"));
+        assert_eq!(
+            config.service_unit_for_alias("api").as_deref(),
+            Some("genie-api.service")
+        );
+    }
+
+    #[test]
+    fn services_api_can_be_overridden_in_toml() {
+        let services: ServicesConfig = toml::from_str(
+            r#"
+[core]
+url = "http://127.0.0.1:3000/api/health"
+systemd_unit = "genie-core.service"
+
+[llm]
+url = "http://127.0.0.1:8080/health"
+systemd_unit = "genie-ai-runtime.service"
+
+[api]
+url = "http://10.0.0.5:4080/api/status"
+systemd_unit = "genie-api.service"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(services.api.url, "http://10.0.0.5:4080/api/status");
+    }
+
+    #[test]
+    fn services_api_falls_back_when_toml_omits_section() {
+        // Existing deployments may have [services.core] and [services.llm] but
+        // no [services.api] yet — they must keep parsing.
+        let services: ServicesConfig = toml::from_str(
+            r#"
+[core]
+url = "http://127.0.0.1:3000/api/health"
+systemd_unit = "genie-core.service"
+
+[llm]
+url = "http://127.0.0.1:8080/health"
+systemd_unit = "genie-ai-runtime.service"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(services.api.url, "http://127.0.0.1:3080/api/status");
+    }
+
+    fn http_target(url: &str) -> (String, String) {
+        match parse_service_probe_target(url) {
+            ServiceProbeTarget::Http { addr, path } => (addr, path),
+            other => panic!("expected Http target for {url}, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_service_probe_target_splits_http_url() {
+        let (addr, path) = http_target("http://127.0.0.1:3080/api/status");
+        assert_eq!(addr, "127.0.0.1:3080");
+        assert_eq!(path, "/api/status");
+    }
+
+    #[test]
+    fn parse_service_probe_target_keeps_trailing_slash() {
+        let (addr, path) = http_target("http://192.168.1.50:8123/");
+        assert_eq!(addr, "192.168.1.50:8123");
+        assert_eq!(path, "/");
+    }
+
+    #[test]
+    fn parse_service_probe_target_defaults_http_port_when_missing() {
+        let (addr, path) = http_target("http://homeassistant.local/api/");
+        assert_eq!(addr, "homeassistant.local:80");
+        assert_eq!(path, "/api/");
+    }
+
+    #[test]
+    fn parse_service_probe_target_defaults_path_when_missing() {
+        let (addr, path) = http_target("http://127.0.0.1:8123");
+        assert_eq!(addr, "127.0.0.1:8123");
+        assert_eq!(path, "/");
+    }
+
+    #[test]
+    fn parse_service_probe_target_treats_bare_url_as_http() {
+        // Some legacy configs wrote the host:port without a scheme; keep
+        // them working as http targets.
+        let (addr, path) = http_target("127.0.0.1:3080/api/status");
+        assert_eq!(addr, "127.0.0.1:3080");
+        assert_eq!(path, "/api/status");
+    }
+
+    #[test]
+    fn parse_service_probe_target_rejects_https_as_unsupported() {
+        // Regression for PR #127 review: HTTPS must NOT silently default to
+        // port 443 and then be probed with plaintext over a raw TcpStream —
+        // a healthy HTTPS service would be reported DOWN. Surface it as an
+        // explicit unsupported scheme so the caller can label the row.
+        match parse_service_probe_target("https://ha.example/api/") {
+            ServiceProbeTarget::UnsupportedScheme { scheme } => assert_eq!(scheme, "https"),
+            other => panic!("expected UnsupportedScheme for https://, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_service_probe_target_handles_ipv6_with_explicit_port() {
+        let (addr, path) = http_target("http://[::1]:3080/api/status");
+        assert_eq!(addr, "[::1]:3080");
+        assert_eq!(path, "/api/status");
+    }
+
+    #[test]
+    fn parse_service_probe_target_adds_default_port_to_bracketed_ipv6() {
+        // Regression for PR #127 review: a naive `authority.contains(':')`
+        // check sees the colons inside [::1] and skips the default port,
+        // producing `[::1]` which TcpStream::connect cannot parse. Make
+        // sure we emit `[::1]:80` instead.
+        let (addr, path) = http_target("http://[::1]/api/status");
+        assert_eq!(addr, "[::1]:80");
+        assert_eq!(path, "/api/status");
+    }
+
+    #[test]
+    fn parse_service_probe_target_handles_bracketed_ipv6_without_path() {
+        let (addr, path) = http_target("http://[fe80::1%25eth0]");
+        assert_eq!(addr, "[fe80::1%25eth0]:80");
+        assert_eq!(path, "/");
     }
 
     #[test]
@@ -969,6 +1566,66 @@ mod tests {
         config.core.port = 3000;
         config.core.bind_host = "0.0.0.0".into();
         assert_eq!(config.core_http_addr(), "127.0.0.1:3000");
+    }
+
+    #[test]
+    fn core_health_url_uses_default_port() {
+        let config = test_config();
+        assert_eq!(config.core_health_url(), "http://127.0.0.1:3000/api/health");
+    }
+
+    #[test]
+    fn core_health_url_tracks_custom_core_port() {
+        let mut config = test_config();
+        config.core.port = 3001;
+        assert_eq!(config.core_health_url(), "http://127.0.0.1:3001/api/health");
+    }
+
+    #[test]
+    fn core_health_url_maps_listen_all_to_loopback() {
+        let mut config = test_config();
+        config.core.bind_host = "0.0.0.0".into();
+        assert_eq!(config.core_health_url(), "http://127.0.0.1:3000/api/health");
+    }
+
+    #[test]
+    fn core_health_url_honors_custom_bind_host() {
+        let mut config = test_config();
+        config.core.bind_host = "10.0.0.5".into();
+        config.core.port = 4000;
+        assert_eq!(config.core_health_url(), "http://10.0.0.5:4000/api/health");
+    }
+
+    #[test]
+    fn core_health_url_ignores_stale_services_core_url() {
+        let mut config = test_config();
+        config.core.port = 3001;
+        config.services.core.url = "http://127.0.0.1:3000/api/health".into();
+        assert_eq!(config.core_health_url(), "http://127.0.0.1:3001/api/health");
+    }
+
+    #[test]
+    fn api_http_addr_defaults_to_documented_port() {
+        let config = test_config();
+        assert_eq!(config.api_http_addr().unwrap(), "127.0.0.1:3080");
+    }
+
+    #[test]
+    fn api_http_addr_follows_services_api_url() {
+        let mut config = test_config();
+        config.services.api.url = "http://127.0.0.1:4080/api/status".into();
+        assert_eq!(config.api_http_addr().unwrap(), "127.0.0.1:4080");
+    }
+
+    #[test]
+    fn api_http_addr_rejects_https_url() {
+        let mut config = test_config();
+        config.services.api.url = "https://api.example/api/status".into();
+        let err = config.api_http_addr().unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported scheme"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -1359,7 +2016,16 @@ device_path = "/dev/spidev1.0"
 }
 
 mod defaults {
+    use super::{LlmBackendKind, RuntimeBoundaryMode, ServiceEndpoint};
     use std::path::PathBuf;
+
+    pub fn api_service() -> ServiceEndpoint {
+        ServiceEndpoint {
+            url: "http://127.0.0.1:3080/api/status".into(),
+            systemd_unit: "genie-api.service".into(),
+            backend: LlmBackendKind::default(),
+        }
+    }
 
     pub fn data_dir() -> PathBuf {
         PathBuf::from("/opt/geniepod/data")
@@ -1399,6 +2065,21 @@ mod defaults {
     }
     pub fn core_bind_host() -> String {
         "127.0.0.1".into()
+    }
+    pub fn agent_context_window_tokens() -> u32 {
+        4096
+    }
+    pub fn agent_ai_boundary() -> RuntimeBoundaryMode {
+        RuntimeBoundaryMode::ExternalRuntime
+    }
+    pub fn agent_voice_boundary() -> RuntimeBoundaryMode {
+        RuntimeBoundaryMode::TransitionalAdapter
+    }
+    pub fn agent_home_boundary() -> RuntimeBoundaryMode {
+        RuntimeBoundaryMode::TransitionalAdapter
+    }
+    pub fn optional_ai_provider_api_key_env() -> String {
+        "GENIEPOD_AI_PROVIDER_API_KEY".into()
     }
     pub fn llm_model_name() -> String {
         "phi".into()
@@ -1527,6 +2208,14 @@ mod defaults {
         // 1 MB sendVoice limit at Piper's typical OGG/Opus output rate.
         // Long-form replies fall back to text.
         800
+    }
+    pub fn telegram_voice_max_parallel_voice() -> usize {
+        // Two concurrent voice pipelines is enough to satisfy issue #77's
+        // AC #8 (two voice messages from different chats transcribe in
+        // parallel) while leaving headroom for ffmpeg / whisper-server on a
+        // Jetson Orin Nano-class device. Bump in deployment configs if the
+        // host has more CPU / a dedicated whisper-server.
+        2
     }
     pub fn web_search_enabled() -> bool {
         true

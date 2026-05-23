@@ -15,6 +15,11 @@ and channel/session adapters.
 GenieClaw is not the voice pipeline, the LLM runtime, the OS, the final
 home-control runtime, or the product app layer.
 
+The default agent contract is intentionally small: the Jetson profile uses
+`[agent].context_window_tokens = 4096`. Larger adaptive contexts can exist for
+stronger models, but provider/runtime paths must pass the 4096-token harness
+first.
+
 ## Boundary
 
 | Layer | Owner | Notes |
@@ -50,6 +55,8 @@ genie-ai-runtime   Home Assistant today
 - Home Assistant adapter with confirmations, rate limits, and audit logging
 - local HTTP API, dashboard, CLI, health service, and governor service
 - optional `web_search` tool with DuckDuckGo or SearXNG
+- cache-aware `genie-ai-runtime` requests with `conversation_id` and
+  `nvext.agent_hints` for session KV reuse
 - Jetson aarch64 cross-compile CI
 
 Current workspace version: `v1.0.0-alpha.9`.
@@ -178,6 +185,24 @@ That means the user talks to GeniePod, not directly to Home Assistant internals.
 - keep Home Assistant behind a provider boundary until `genie-home-runtime`
 - allow optional API-key providers only when they pass the same limited-context harness
 - keep development usable on SBCs, laptops, and Macs without making Jetson less native
+
+## Agent Contract
+
+The repo now has explicit code-level contract surfaces for the new direction:
+
+- `genie_core::runtime_boundary` declares the AI, voice, and home runtime
+  boundaries so GenieClaw remains the agent layer.
+- `genie_core::agent_harness` checks prompt, tool manifest, memory hydration,
+  response reserve, and optional provider context against the Jetson 4096-token
+  baseline.
+- `genie_core::llm::LlmRequestHints` carries session id, expected output
+  length, priority, and short-lived cache TTL to runtimes that understand the
+  `nvext` extension.
+- `[agent]` in `geniepod.toml` selects the runtime profile:
+  `jetson`, `raspberry_pi`, `portable_sbc`, `laptop`, or `mac`.
+- `[optional_ai_provider]` is disabled by default. API-key providers must keep
+  their configured context at or below `[agent].context_window_tokens` before
+  they are production candidates.
 
 ## Quick Start
 

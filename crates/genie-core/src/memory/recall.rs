@@ -161,7 +161,33 @@ pub fn recall_with_context(
     context: policy::MemoryReadContext,
 ) -> Result<Vec<RecallableMemory>> {
     let results = memory.search(query, limit)?;
-    Ok(filter_recall_results(results, context))
+    let raw_hits = results.len();
+    let recalled = filter_recall_results(results, context);
+
+    if !query.trim().is_empty() && recalled.is_empty() {
+        // Distinguish "FTS/LIKE returned nothing" from "results were dropped by
+        // shared-room / scope / sensitivity policy". Both produce an empty
+        // recall context, but they need different remediation, so we emit a
+        // labeled event instead of letting the miss vanish into a silent
+        // empty prompt context (M1 exit criterion, issue #111).
+        let cause = if raw_hits == 0 {
+            "no_match"
+        } else {
+            "policy_filtered"
+        };
+        tracing::warn!(
+            target: "memory.recall.miss",
+            cause,
+            raw_hits = raw_hits as u64,
+            query_len = query.len() as u64,
+            identity_confidence = ?context.identity_confidence,
+            explicit_named_person = context.explicit_named_person,
+            shared_space_voice = context.shared_space_voice,
+            "memory recall miss"
+        );
+    }
+
+    Ok(recalled)
 }
 
 pub fn filter_recall_results(
