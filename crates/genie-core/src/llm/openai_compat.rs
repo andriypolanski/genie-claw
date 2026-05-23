@@ -771,7 +771,9 @@ fn truncate_body(body: &str) -> String {
     if trimmed.len() <= MAX_LEN {
         trimmed.to_string()
     } else {
-        format!("{}...", &trimmed[..MAX_LEN])
+        // Slice on a UTF-8 char boundary; a fixed byte offset can land mid-character
+        // and panic, which aborts the whole daemon under `panic = "abort"`.
+        format!("{}...", truncate_utf8(trimmed, MAX_LEN))
     }
 }
 
@@ -966,5 +968,42 @@ mod tests {
         assert!(system_role_not_supported(
             "Error rendering prompt: system role not supported"
         ));
+    }
+
+    #[test]
+    fn truncate_body_does_not_panic_on_multibyte_boundary() {
+        // A multi-byte char ('é' is 2 bytes) straddling the 240-byte cutoff used to
+        // panic via `&trimmed[..240]`. The result must be valid UTF-8 ending in "...".
+        let body = format!("{}é{}", "a".repeat(239), "b".repeat(50));
+        let out = truncate_body(&body);
+        assert!(out.ends_with("..."));
+        assert!(out.len() <= 240 + 3);
+        // The truncated prefix never includes a partial 'é'.
+        assert!(!out.trim_end_matches("...").ends_with('\u{fffd}'));
+    }
+
+    #[test]
+    fn truncate_body_returns_short_bodies_untouched() {
+        assert_eq!(truncate_body("  short error  "), "short error");
+    }
+
+    #[test]
+    fn backend_error_message_truncates_non_json_unicode_body() {
+        // Localized HTML/plain error pages reach the truncate_body fallback.
+        let body = format!("<html>错误页面 {}</html>", "字".repeat(200));
+        let msg = backend_error_message(&body);
+        assert!(msg.ends_with("..."));
+    }
+
+    #[test]
+    fn backend_error_message_extracts_nested_and_top_level_message() {
+        assert_eq!(
+            backend_error_message(r#"{"error":{"message":"rate limited"}}"#),
+            "rate limited"
+        );
+        assert_eq!(
+            backend_error_message(r#"{"message":"bad request"}"#),
+            "bad request"
+        );
     }
 }
