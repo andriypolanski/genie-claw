@@ -39,6 +39,17 @@ pub async fn stream_and_speak(
     max_tokens: u32,
     tts_engine: Arc<TtsEngine>,
 ) -> Result<String> {
+    stream_and_speak_with_hints(llm, messages, max_tokens, tts_engine, None).await
+}
+
+/// Stream the LLM response with optional runtime cache/scheduling hints.
+pub async fn stream_and_speak_with_hints(
+    llm: &crate::llm::LlmClient,
+    messages: &[crate::llm::Message],
+    max_tokens: u32,
+    tts_engine: Arc<TtsEngine>,
+    hints: Option<&crate::llm::LlmRequestHints>,
+) -> Result<String> {
     let (tx, mut rx) = mpsc::unbounded_channel::<String>();
 
     let tts_for_task = Arc::clone(&tts_engine);
@@ -59,14 +70,21 @@ pub async fn stream_and_speak(
     let mut full_response = String::new();
     let mut streamer = SentenceStreamer::new(MAX_SPOKEN_SENTENCES);
 
-    let stream_result = llm
-        .chat_stream(messages, Some(max_tokens), |token| {
+    let stream_result = {
+        let mut on_token = |token: &str| {
             full_response.push_str(token);
             for sentence in streamer.feed(token) {
                 let _ = tx.send(sentence);
             }
-        })
-        .await;
+        };
+        if let Some(hints) = hints {
+            llm.chat_stream_with_hints(messages, Some(max_tokens), hints, &mut on_token)
+                .await
+        } else {
+            llm.chat_stream(messages, Some(max_tokens), &mut on_token)
+                .await
+        }
+    };
 
     // Always flush and close the channel so the TTS task exits cleanly,
     // whether the LLM stream succeeded or errored partway through.

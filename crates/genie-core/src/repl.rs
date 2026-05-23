@@ -2,7 +2,7 @@ use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, BufReader};
 
 use crate::conversation::ConversationStore;
-use crate::llm::{LlmClient, Message};
+use crate::llm::{LlmClient, LlmRequestHints, Message};
 use crate::memory::{self, Memory};
 use crate::prompt::ModelFamily;
 use crate::reasoning::InteractionKind;
@@ -134,8 +134,9 @@ pub async fn run(
 
         // Stream LLM response.
         eprint!("\nGeniePod: ");
+        let request_hints = LlmRequestHints::agent_turn(&conv_id, 512);
         match llm
-            .chat_stream(&messages, Some(512), |token| {
+            .chat_stream_with_hints(&messages, Some(512), &request_hints, |token| {
                 eprint!("{}", token);
             })
             .await
@@ -197,8 +198,11 @@ pub async fn run(
                         );
 
                         eprint!("GeniePod: ");
+                        let summary_hints = LlmRequestHints::tool_summary(&conv_id, 128);
                         match llm
-                            .chat_stream(&summary_msgs, Some(128), |t| eprint!("{}", t))
+                            .chat_stream_with_hints(&summary_msgs, Some(128), &summary_hints, |t| {
+                                eprint!("{}", t)
+                            })
                             .await
                         {
                             Ok(summary) => {
