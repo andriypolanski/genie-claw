@@ -207,14 +207,14 @@ impl Governor {
             let Some(unit) = self.service_unit_for_alias(alias) else {
                 continue;
             };
-            let _ = ServiceCtl::stop(&unit).await;
+            ServiceCtl::stop(&unit).await?;
         }
 
         // Handle LLM model swap.
         match (from, target) {
             (_, Mode::Media) => {
                 let unit = self.llm_service_unit();
-                let _ = ServiceCtl::stop(&unit).await;
+                ServiceCtl::stop(&unit).await?;
             }
             (Mode::Media, _) => {
                 if let Some(model) = target.llm_model() {
@@ -253,7 +253,7 @@ impl Governor {
                 continue;
             };
             if !ServiceCtl::is_active(&unit).await {
-                let _ = ServiceCtl::start(&unit).await;
+                ServiceCtl::start(&unit).await?;
             }
         }
 
