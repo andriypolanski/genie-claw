@@ -437,6 +437,8 @@ pub struct AuditEvent {
     pub action_id: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub undo_of: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub undo_restore: Option<UndoRestore>,
 }
 
 /// A failure while appending one JSON line to an audit log, tagged by the step
@@ -582,7 +584,7 @@ fn audit_event_to_recorded_action(event: AuditEvent) -> Option<RecordedAction> {
         action: event.action.clone(),
         value: event.value,
         inverse_action: inverse_action(&event.action).map(str::to_string),
-        undo_restore: None,
+        undo_restore: event.undo_restore,
         origin: event.origin,
         summary: event.reason,
         confidence: event.confidence,
@@ -915,6 +917,7 @@ mod tests {
             confidence: Some(0.9),
             action_id: Some(1),
             undo_of: None,
+            undo_restore: None,
         }
     }
 
@@ -996,6 +999,7 @@ mod tests {
                     confidence: None,
                     action_id: if idx % 2 == 0 { Some(idx) } else { None },
                     undo_of: None,
+                    undo_restore: None,
                 })
                 .expect("append audit event");
         }
@@ -1030,6 +1034,7 @@ mod tests {
                 confidence: Some(0.9),
                 action_id: Some(1),
                 undo_of: None,
+                undo_restore: None,
             })
             .expect("append executed event");
         logger
@@ -1045,12 +1050,80 @@ mod tests {
                 confidence: None,
                 action_id: None,
                 undo_of: None,
+                undo_restore: None,
             })
             .expect("append confirmation event");
 
         let actions = logger.read_recent_executed_actions(10);
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].entity, "kitchen light");
+        assert_eq!(actions[0].inverse_action.as_deref(), Some("turn_off"));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn audit_logger_hydrates_undo_restore_from_executed_event() {
+        let path = std::env::temp_dir().join(format!(
+            "geniepod-actuation-audit-undo-restore-{}.jsonl",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let logger = AuditLogger::new(&path);
+
+        logger
+            .append(AuditEvent {
+                ts_ms: 100,
+                status: AuditStatus::Executed,
+                origin: RequestOrigin::Dashboard,
+                entity: "kitchen light".into(),
+                action: "set_brightness".into(),
+                value: Some(30.0),
+                reason: "home action executed".into(),
+                token: None,
+                confidence: Some(0.95),
+                action_id: Some(7),
+                undo_of: None,
+                undo_restore: Some(UndoRestore {
+                    action: "set_brightness".into(),
+                    value: Some(100.0),
+                }),
+            })
+            .expect("append executed event");
+
+        let actions = logger.read_recent_executed_actions(10);
+        assert_eq!(actions.len(), 1);
+        let restore = actions[0].undo_restore.as_ref().unwrap();
+        assert_eq!(restore.action, "set_brightness");
+        assert_eq!(restore.value, Some(100.0));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn audit_logger_hydrates_legacy_lines_without_undo_restore_field() {
+        let path = std::env::temp_dir().join(format!(
+            "geniepod-actuation-audit-legacy-{}.jsonl",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let line = serde_json::json!({
+            "ts_ms": 100,
+            "status": "executed",
+            "origin": "dashboard",
+            "entity": "kitchen light",
+            "action": "turn_on",
+            "value": null,
+            "reason": "home action executed",
+            "token": null,
+            "confidence": 0.9,
+            "action_id": 1,
+            "undo_of": null
+        });
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let logger = AuditLogger::new(&path);
+        let actions = logger.read_recent_executed_actions(10);
+        assert_eq!(actions.len(), 1);
+        assert!(actions[0].undo_restore.is_none());
         assert_eq!(actions[0].inverse_action.as_deref(), Some("turn_off"));
         let _ = std::fs::remove_file(&path);
     }
