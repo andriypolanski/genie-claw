@@ -21,6 +21,12 @@
   the first. A balanced candidate that fails to parse is now retried once with a
   string-aware trailing-comma strip, recovering the correct call for both the
   runtime and BFCL eval paths.
+- **Entity-domain inference matches whole words** (#477): `infer_domain` used
+  substring matching, so the climate term `"ac"` matched inside "b**ac**k" —
+  "open the back blinds" and "lock the back door" mis-routed to the climate
+  domain. It now classifies query tokens through the shared whole-word
+  `entity_fidelity::domain_of_word`, aligning runtime routing with the fidelity
+  guard and BFCL grounding.
 
 ## 1.0.0-alpha.11 - 2026-06-20
 
