@@ -4076,7 +4076,24 @@ mod tests {
                 .await;
                 assert!(actions_no_tok.starts_with("HTTP/1.1 403"), "{actions_no_tok:?}");
 
-                // A read route stays open without a token.
+                let memories_no_tok = http_roundtrip(
+                    port,
+                    "GET /api/memories HTTP/1.1\r\nHost: localhost\r\n\r\n",
+                )
+                .await;
+                assert!(memories_no_tok.starts_with("HTTP/1.1 403"), "{memories_no_tok:?}");
+
+                let memories_with_tok = http_roundtrip(
+                    port,
+                    "GET /api/memories HTTP/1.1\r\nHost: localhost\r\nX-Genie-Token: s3cret\r\n\r\n",
+                )
+                .await;
+                assert!(
+                    memories_with_tok.starts_with("HTTP/1.1 200"),
+                    "{memories_with_tok:?}"
+                );
+
+                // Non-sensitive read routes stay open without a token.
                 let read = http_roundtrip(
                     port,
                     "GET /api/conversations HTTP/1.1\r\nHost: localhost\r\n\r\n",
